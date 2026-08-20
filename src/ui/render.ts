@@ -14,6 +14,14 @@ import {
   moveWasteToTableau,
   willReveal,
 } from "../game/klondike";
+import {
+  canDrawFromStock,
+  canUndo,
+  createRoundState,
+  isRoundStuck,
+  registerStockDraw,
+  registerUndo,
+} from "../game/roguelike";
 import { applyScoreEvent, createScoreState, type ScoreState } from "../game/scoring";
 
 type Selection =
@@ -22,19 +30,114 @@ type Selection =
   | { kind: "foundation"; suit: (typeof SUITS)[number] }
   | null;
 
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+/** Snapshots the viewport position of every rendered card, keyed by card id. */
+function captureCardRects(root: HTMLElement): Map<string, DOMRect> {
+  const rects = new Map<string, DOMRect>();
+  root.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => {
+    const id = el.dataset.cardId;
+    if (id) rects.set(id, el.getBoundingClientRect());
+  });
+  return rects;
+}
+
+/**
+ * FLIP technique: given where each still-present card used to be, apply an
+ * inverse transform so it visually stays put, then release it next frame so
+ * the browser animates the transform back to identity — i.e. the card
+ * appears to slide from its old spot to its new one, without ever having to
+ * reuse or diff DOM nodes across renders.
+ */
+function animateCardMoves(root: HTMLElement, firstRects: Map<string, DOMRect>): void {
+  const moved: { el: HTMLElement; dx: number; dy: number }[] = [];
+
+  root.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => {
+    const id = el.dataset.cardId;
+    const first = id && firstRects.get(id);
+    if (!first) return;
+
+    const last = el.getBoundingClientRect();
+    const dx = first.left - last.left;
+    const dy = first.top - last.top;
+    if (dx === 0 && dy === 0) return;
+
+    el.style.transition = "none";
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    moved.push({ el, dx, dy });
+  });
+
+  if (moved.length === 0) return;
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      for (const { el } of moved) {
+        el.style.transition = "";
+        el.style.transform = "";
+      }
+    });
+  });
+}
+
 interface Snapshot {
   state: GameState;
   score: ScoreState;
+  redealsUsed?: number;
 }
 
-export function mountGame(root: HTMLElement, initialState: GameState = dealNewGame()): void {
+export interface HandEndResult {
+  won: boolean;
+  score: number;
+}
+
+export interface MountOptions {
+  /** Defaults to a fresh dealt hand. */
+  initialState?: GameState;
+  /** Caps stock redeals for the round. Omit for unlimited (freeplay). */
+  redealsAllowed?: number;
+  /** Caps undos for the round. Omit for unlimited (freeplay). */
+  undosAllowed?: number;
+  /** Round's score target. When set, the HUD shows "Score: X / target". */
+  target?: number;
+  /** Extra HUD context, e.g. current round number and lives remaining. */
+  roundInfo?: { round: number; lives: number };
+  /**
+   * Fires once, the moment the hand is won (all foundations complete) or
+   * becomes stuck (no legal move and no way to draw). In this mode the
+   * New Game button is hidden — round progression is owned by whoever
+   * passed this callback (see ui/app.ts), not by this hand.
+   */
+  onHandEnd?: (result: HandEndResult) => void;
+}
+
+export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
+  const { initialState = dealNewGame(), redealsAllowed, undosAllowed, target, roundInfo, onHandEnd } = options;
+
   let state = initialState;
   let score = createScoreState();
   let selection: Selection = null;
   let history: Snapshot[] = [];
+  // Unset allowances mean "unlimited" (freeplay); Infinity never blocks below.
+  const roundState = createRoundState(
+    redealsAllowed ?? Number.POSITIVE_INFINITY,
+    undosAllowed ?? Number.POSITIVE_INFINITY,
+  );
+  let ended = false;
+  const reduceMotion = prefersReducedMotion();
+  // Tracks each card's face-up state as of the *previous* draw, so a
+  // false -> true transition this draw can be flagged as a fresh reveal.
+  let previousFaceUp = new Map<string, boolean>();
+  let nextFaceUp = new Map<string, boolean>();
+  let previousWon = false;
 
   function snapshot(): Snapshot {
-    return { state: cloneState(state), score: { ...score } };
+    return { state: cloneState(state), score: { ...score }, redealsUsed: roundState.redealsUsed };
   }
 
   // Commits a snapshot taken *before* a successful mutation, so it can be
@@ -43,6 +146,19 @@ export function mountGame(root: HTMLElement, initialState: GameState = dealNewGa
     history.push(prev);
     selection = null;
     draw();
+  }
+
+  function checkHandEnd() {
+    if (ended || !onHandEnd) return;
+    if (isWon(state) || (target !== undefined && score.total >= target)) {
+      // A perfect clear always wins; reaching the target also wins the
+      // round immediately, without having to finish out the hand.
+      ended = true;
+      onHandEnd({ won: true, score: score.total });
+    } else if (isRoundStuck(state, roundState)) {
+      ended = true;
+      onHandEnd({ won: false, score: score.total });
+    }
   }
 
   function select(next: NonNullable<Selection>) {
@@ -161,7 +277,10 @@ export function mountGame(root: HTMLElement, initialState: GameState = dealNewGa
   }
 
   function handleStockClick() {
+    if (!canDrawFromStock(state, roundState)) return;
+
     const prev = snapshot();
+    registerStockDraw(state, roundState); // must run before drawFromStock mutates
     drawFromStock(state);
     history.push(prev);
     selection = null;
@@ -207,10 +326,13 @@ export function mountGame(root: HTMLElement, initialState: GameState = dealNewGa
   }
 
   function handleUndo() {
+    if (!canUndo(roundState)) return;
     const prev = history.pop();
     if (!prev) return;
     state = prev.state;
     score = prev.score;
+    if (prev.redealsUsed !== undefined) roundState.redealsUsed = prev.redealsUsed;
+    registerUndo(roundState);
     selection = null;
     draw();
   }
@@ -224,8 +346,20 @@ export function mountGame(root: HTMLElement, initialState: GameState = dealNewGa
   }
 
   function renderCard(card: Card, faceUp: boolean, selected: boolean): HTMLElement {
+    const justRevealed = !reduceMotion && faceUp && previousFaceUp.get(card.id) === false;
+    nextFaceUp.set(card.id, faceUp);
+
     const el = document.createElement("div");
-    el.className = `card ${faceUp ? "face-up" : "face-down"} ${faceUp && isRed(card.suit) ? "red" : ""} ${selected ? "selected" : ""}`;
+    el.dataset.cardId = card.id;
+    el.className = [
+      "card",
+      faceUp ? "face-up" : "face-down",
+      faceUp && isRed(card.suit) ? "red" : "",
+      selected ? "selected" : "",
+      justRevealed ? "revealing" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     if (faceUp) {
       el.innerHTML = `<span class="rank">${rankLabel(card.rank)}</span><span class="suit">${SUIT_SYMBOL[card.suit]}</span>`;
     }
@@ -233,13 +367,28 @@ export function mountGame(root: HTMLElement, initialState: GameState = dealNewGa
   }
 
   function draw(): void {
+    const firstRects = captureCardRects(root);
+    nextFaceUp = new Map();
+    const justWon = !reduceMotion && isWon(state) && !previousWon;
+
     root.innerHTML = "";
 
     const hud = document.createElement("div");
     hud.className = "hud";
-    hud.innerHTML = `<span class="score">Score: ${score.total}</span>`;
+    hud.innerHTML = `<span class="score">Score: ${score.total}${target !== undefined ? ` / ${target}` : ""}</span>`;
     if (score.comboStreak > 1) {
       hud.innerHTML += `<span class="combo">Combo x${score.comboStreak}</span>`;
+    }
+    if (roundInfo) {
+      hud.innerHTML += `<span class="round-info">Round ${roundInfo.round} · ♥${roundInfo.lives}</span>`;
+    }
+    if (redealsAllowed !== undefined) {
+      const redealsLeft = roundState.redealsAllowed - roundState.redealsUsed;
+      hud.innerHTML += `<span class="redeals">Redeals left: ${redealsLeft}</span>`;
+    }
+    if (undosAllowed !== undefined) {
+      const undosLeft = roundState.undosAllowed - roundState.undosUsed;
+      hud.innerHTML += `<span class="undos-left">Undos left: ${undosLeft}</span>`;
     }
     root.appendChild(hud);
 
@@ -278,7 +427,7 @@ export function mountGame(root: HTMLElement, initialState: GameState = dealNewGa
     topRow.appendChild(document.createElement("div")).className = "spacer";
 
     // Foundations
-    for (const suit of SUITS) {
+    SUITS.forEach((suit, suitIndex) => {
       const pile = document.createElement("div");
       pile.className = "pile foundation";
       const cards = state.foundations[suit];
@@ -289,9 +438,13 @@ export function mountGame(root: HTMLElement, initialState: GameState = dealNewGa
         pile.classList.add("empty");
         pile.textContent = SUIT_SYMBOL[suit];
       }
+      if (justWon) {
+        pile.classList.add("celebrating");
+        pile.style.animationDelay = `${suitIndex * 90}ms`;
+      }
       pile.addEventListener("click", () => handleFoundationClick(suit));
       topRow.appendChild(pile);
-    }
+    });
 
     board.appendChild(topRow);
 
@@ -331,7 +484,7 @@ export function mountGame(root: HTMLElement, initialState: GameState = dealNewGa
 
     if (isWon(state)) {
       const banner = document.createElement("div");
-      banner.className = "win-banner";
+      banner.className = justWon ? "win-banner celebrating" : "win-banner";
       banner.textContent = "You win!";
       root.appendChild(banner);
     }
@@ -342,17 +495,26 @@ export function mountGame(root: HTMLElement, initialState: GameState = dealNewGa
     const undoBtn = document.createElement("button");
     undoBtn.className = "undo";
     undoBtn.textContent = "Undo";
-    undoBtn.disabled = history.length === 0;
+    undoBtn.disabled = history.length === 0 || !canUndo(roundState);
     undoBtn.addEventListener("click", handleUndo);
     controls.appendChild(undoBtn);
 
-    const newGameBtn = document.createElement("button");
-    newGameBtn.className = "new-game";
-    newGameBtn.textContent = "New Game";
-    newGameBtn.addEventListener("click", handleNewGame);
-    controls.appendChild(newGameBtn);
+    if (!onHandEnd) {
+      // Round progression outside freeplay is owned by the caller (ui/app.ts).
+      const newGameBtn = document.createElement("button");
+      newGameBtn.className = "new-game";
+      newGameBtn.textContent = "New Game";
+      newGameBtn.addEventListener("click", handleNewGame);
+      controls.appendChild(newGameBtn);
+    }
 
     root.appendChild(controls);
+
+    previousFaceUp = nextFaceUp;
+    previousWon = isWon(state);
+    if (!reduceMotion) animateCardMoves(root, firstRects);
+
+    checkHandEnd();
   }
 
   draw();

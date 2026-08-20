@@ -7,6 +7,7 @@ import {
   dealNewGame,
   drawFromStock,
   type GameState,
+  hasLegalMove,
   isWon,
   moveFoundationToTableau,
   moveTableauToFoundation,
@@ -301,5 +302,61 @@ describe("willReveal", () => {
   it("is false at the bottom of the column (nothing underneath)", () => {
     const column = [card("clubs", 8)];
     expect(willReveal(column, 0)).toBe(false);
+  });
+});
+
+describe("hasLegalMove", () => {
+  it("detects a waste-to-foundation move", () => {
+    const state = emptyState();
+    state.waste = [card("hearts", 1)];
+    expect(hasLegalMove(state)).toBe(true);
+  });
+
+  it("detects a waste-to-tableau move", () => {
+    const state = emptyState();
+    state.waste = [card("hearts", 7)];
+    state.tableau[0] = [card("clubs", 8)];
+    expect(hasLegalMove(state)).toBe(true);
+  });
+
+  it("detects a tableau-to-foundation move for a column's top card", () => {
+    const state = emptyState();
+    state.tableau[0] = [card("hearts", 1)];
+    expect(hasLegalMove(state)).toBe(true);
+  });
+
+  it("detects a tableau-to-tableau run move starting below the top card", () => {
+    const state = emptyState();
+    state.tableau[0] = [card("clubs", 8, false), card("hearts", 7), card("spades", 6)];
+    state.tableau[1] = [card("spades", 8)];
+    expect(hasLegalMove(state)).toBe(true);
+  });
+
+  it("ignores face-down cards", () => {
+    const state = emptyState();
+    state.tableau[0] = [card("hearts", 1, false)];
+    expect(hasLegalMove(state)).toBe(false);
+  });
+
+  it("ignores foundation-to-tableau moves (not a real way to get unstuck)", () => {
+    const state = emptyState();
+    state.foundations.hearts = [card("hearts", 1)];
+    state.tableau[0] = [card("clubs", 2)];
+    expect(hasLegalMove(state)).toBe(false);
+  });
+
+  it("returns false when genuinely stuck", () => {
+    const state = emptyState();
+    state.waste = [card("clubs", 7)];
+    state.tableau = [
+      [card("clubs", 8, false), card("spades", 5)],
+      [card("spades", 9)],
+      [card("clubs", 2)],
+      [card("clubs", 4)],
+      [card("spades", 6)],
+      [card("clubs", 10)],
+      [card("spades", 3)],
+    ];
+    expect(hasLegalMove(state)).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Card, Suit } from "../game/cards";
 import type { GameState } from "../game/klondike";
-import { mountGame } from "./render";
+import { type HandEndResult, mountGame, type MountOptions } from "./render";
 
 let root: HTMLDivElement;
 
@@ -9,8 +9,8 @@ beforeEach(() => {
   root = document.createElement("div");
 });
 
-function mount(initialState?: GameState) {
-  mountGame(root, initialState);
+function mount(initialState?: GameState, options: Omit<MountOptions, "initialState"> = {}) {
+  mountGame(root, { initialState, ...options });
 }
 
 function click(selector: string) {
@@ -215,6 +215,146 @@ describe("undo", () => {
     expect(scoreText()).toBe("Score: 0");
     expect(root.querySelector(".pile.waste")?.classList.contains("empty")).toBe(false);
     expect(root.querySelector<HTMLButtonElement>(".undo")?.disabled).toBe(true);
+  });
+});
+
+describe("animation cues", () => {
+  it("does not mark initially face-up cards as revealing on first paint", () => {
+    const state = emptyState();
+    state.tableau[0] = [card("hearts", 7)];
+    mount(state);
+
+    expect(root.querySelector(".tableau-row .column:first-child .card.revealing")).toBeNull();
+  });
+
+  it("marks a card as revealing when a move exposes it", () => {
+    const state = emptyState();
+    state.tableau[0] = [card("spades", 9, false), card("hearts", 1)];
+    mount(state);
+
+    click(".tableau-row .column:first-child .card:last-child"); // Ace auto-moves to foundation, exposing spades-9
+
+    const revealed = root.querySelector(".tableau-row .column:first-child .card");
+    expect(revealed?.classList.contains("revealing")).toBe(true);
+    expect(revealed?.getAttribute("data-card-id")).toBe("spades-9");
+  });
+
+  it("celebrates on the win banner and foundations when the hand is won", () => {
+    const state = emptyState();
+    for (const suit of ["spades", "hearts", "diamonds"] as const) {
+      state.foundations[suit] = Array.from({ length: 13 }, (_, i) => card(suit, i + 1));
+    }
+    state.foundations.clubs = Array.from({ length: 12 }, (_, i) => card("clubs", i + 1));
+    state.waste = [card("clubs", 13)];
+    mount(state);
+
+    click(".pile.waste");
+
+    expect(root.querySelector(".win-banner.celebrating")).not.toBeNull();
+    expect(root.querySelectorAll(".pile.foundation.celebrating")).toHaveLength(4);
+  });
+});
+
+describe("roguelike mode", () => {
+  it("shows the target and round info in the HUD", () => {
+    const state = emptyState();
+    mount(state, { target: 150, roundInfo: { round: 3, lives: 2 } });
+
+    expect(scoreText()).toBe("Score: 0 / 150");
+    const roundInfo = root.querySelector(".hud .round-info")?.textContent ?? "";
+    expect(roundInfo).toContain("Round 3");
+    expect(roundInfo).toContain("2");
+  });
+
+  it("shows the remaining undo count and blocks undo once it's exhausted", () => {
+    const state = emptyState();
+    state.waste = [card("hearts", 1), card("clubs", 1)];
+    mount(state, { undosAllowed: 1 });
+
+    expect(root.querySelector(".hud .undos-left")?.textContent).toContain("1");
+
+    click(".pile.waste"); // clubs Ace -> foundation
+    click(".pile.waste"); // hearts Ace -> foundation
+    expect(root.querySelectorAll(".pile.foundation .card")).toHaveLength(2);
+
+    click(".undo"); // allowed: undosUsed 0 -> 1
+    expect(root.querySelectorAll(".pile.foundation .card")).toHaveLength(1);
+    expect(root.querySelector(".hud .undos-left")?.textContent).toContain("0");
+    expect(root.querySelector<HTMLButtonElement>(".undo")?.disabled).toBe(true);
+
+    click(".undo"); // blocked: allotment exhausted, even though history isn't empty
+    expect(root.querySelectorAll(".pile.foundation .card")).toHaveLength(1);
+  });
+
+  it("shows the remaining redeal count and blocks drawing once it's exhausted", () => {
+    const state = emptyState();
+    state.stock = [card("clubs", 2)];
+    mount(state, { redealsAllowed: 0 });
+
+    expect(root.querySelector(".hud .redeals")?.textContent).toContain("0");
+
+    click(".pile.stock"); // draws the one stock card to waste
+    expect(root.querySelector(".pile.waste")?.classList.contains("empty")).toBe(false);
+    expect(root.querySelector(".pile.stock")?.classList.contains("empty")).toBe(true);
+
+    click(".pile.stock"); // stock empty, no redeals left -> blocked, no-op
+    expect(root.querySelector(".pile.waste")?.classList.contains("empty")).toBe(false);
+    expect(root.querySelector(".pile.stock")?.classList.contains("empty")).toBe(true);
+  });
+
+  it("hides the New Game button when onHandEnd is provided", () => {
+    mount(undefined, { onHandEnd: () => {} });
+    expect(root.querySelector(".new-game")).toBeNull();
+  });
+
+  it("calls onHandEnd once with the final score when the hand is won", () => {
+    const state = emptyState();
+    for (const suit of ["spades", "hearts", "diamonds"] as const) {
+      state.foundations[suit] = Array.from({ length: 13 }, (_, i) => card(suit, i + 1));
+    }
+    state.foundations.clubs = Array.from({ length: 12 }, (_, i) => card("clubs", i + 1));
+    state.waste = [card("clubs", 13)];
+
+    const results: HandEndResult[] = [];
+    mount(state, { onHandEnd: (r) => results.push(r) });
+
+    click(".pile.waste"); // smart-moves the King to complete the last foundation
+
+    expect(root.querySelector(".win-banner")).not.toBeNull();
+    expect(results).toEqual([{ won: true, score: 10 }]);
+  });
+
+  it("wins the round immediately on reaching the target, without finishing the hand", () => {
+    const state = emptyState();
+    state.waste = [card("diamonds", 1)];
+    state.tableau[0] = [card("clubs", 5)]; // left over on the board — hand is not won or stuck
+
+    const results: HandEndResult[] = [];
+    mount(state, { target: 10, onHandEnd: (r) => results.push(r) });
+
+    click(".pile.waste"); // Ace -> foundation, score hits 10 (the target) but the hand isn't won
+
+    expect(root.querySelector(".win-banner")).toBeNull();
+    expect(results).toEqual([{ won: true, score: 10 }]);
+  });
+
+  it("calls onHandEnd once with won:false when the round is stuck from the start", () => {
+    const state = emptyState();
+    state.waste = [card("clubs", 7)];
+    state.tableau = [
+      [card("clubs", 8, false), card("spades", 5)],
+      [card("spades", 9)],
+      [card("clubs", 2)],
+      [card("clubs", 4)],
+      [card("spades", 6)],
+      [card("clubs", 10)],
+      [card("spades", 3)],
+    ];
+
+    const results: HandEndResult[] = [];
+    mount(state, { redealsAllowed: 0, onHandEnd: (r) => results.push(r) });
+
+    expect(results).toEqual([{ won: false, score: 0 }]);
   });
 });
 

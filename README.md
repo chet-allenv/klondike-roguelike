@@ -41,22 +41,30 @@ reload.
 
 ## Status
 
-Core Klondike is playable and scored: a single hand deals and plays via
-click-to-select/click-to-move plus a smart-click auto-move shortcut, with
-a live score HUD and unlimited undo. The roguelike layer (lives, rounds,
-score *target*, power-ups) isn't built yet — see CLAUDE.md's "Next steps"
-for the build order.
+The roguelike round loop is playable end to end: a run starts with 3
+lives at round 1, each round deals a fresh Klondike hand with a rising
+score target and capped redeals/undos, and clearing or busting a hand
+transitions to the next round (or ends the run at 0 lives). Power-up
+drafting isn't built yet — round wins currently go straight to the next
+round — see CLAUDE.md's "Next steps" for the build order.
 
 ## Features
 
 - Project scaffolded with Vite + TypeScript (vanilla, no framework)
-- Playable single-hand Klondike: deal, draw/redeal stock, tableau ↔
-  foundation ↔ tableau moves, win detection, New Game
+- Full Klondike hand: deal, draw/redeal stock, tableau ↔ foundation ↔
+  tableau moves, win detection
 - Smart click: clicking a card auto-moves it when it has exactly one
   legal destination; falls back to select-then-click when ambiguous
 - Scoring HUD (foundation plays, reveals, waste moves, combo streak,
   foundation-to-tableau penalty) per CLAUDE.md's scoring rules
-- Undo button (currently unlimited — see CLAUDE.md's Undo note for how
-  this is meant to become a roguelike resource)
-- Test suite (Vitest) covering deck/card logic, move validation,
-  scoring math, and board interaction
+- Undo button, capped at 3 per round (unlimited in freeplay)
+- **Roguelike run**: lives, round number, rising score target, capped
+  stock redeals (2/round) and undos (3/round), round-result screen
+  between hands, game-over/"New Run" screen at 0 lives
+- Animations: cards slide when moved (any pile to any pile), a subtle
+  glow pulse when a face-down card is revealed, and a win celebration
+  (banner pop + foundation glow) on victory. Respects
+  `prefers-reduced-motion`. Drag-and-drop isn't built — this is on top
+  of the existing click-to-move/smart-click interaction
+- Test suite (Vitest) covering deck/card logic, move validation, round
+  logic, scoring math, and board interaction

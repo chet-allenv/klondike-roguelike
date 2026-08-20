@@ -78,6 +78,38 @@ export function canPlaceOnFoundation(card: Card, state: GameState): boolean {
   return card.rank === nextRank;
 }
 
+/**
+ * Is there any legal tableau/waste/foundation move available? Used to
+ * detect a "stuck" round. Deliberately ignores foundation-to-tableau
+ * moves (undoing progress is always technically legal but isn't a real
+ * way to get unstuck) and ignores whether the stock can still be drawn
+ * (that's a separate, round-level check — see roguelike.ts).
+ */
+export function hasLegalMove(state: GameState): boolean {
+  const wasteTop = state.waste[state.waste.length - 1];
+  if (wasteTop) {
+    if (canPlaceOnFoundation(wasteTop, state)) return true;
+    if (state.tableau.some((column) => canPlaceOnTableau(wasteTop, column))) return true;
+  }
+
+  for (let col = 0; col < state.tableau.length; col++) {
+    const column = state.tableau[col];
+    for (let i = 0; i < column.length; i++) {
+      const card = column[i];
+      if (!card.faceUp) continue;
+
+      if (i === column.length - 1 && canPlaceOnFoundation(card, state)) return true;
+
+      for (let dest = 0; dest < state.tableau.length; dest++) {
+        if (dest === col) continue;
+        if (canPlaceOnTableau(card, state.tableau[dest])) return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /** Draw one card from stock to waste. If stock is empty, redeal waste back into stock. */
 export function drawFromStock(state: GameState): void {
   if (state.stock.length === 0) {

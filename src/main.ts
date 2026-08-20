@@ -1,5 +1,5 @@
 import "./ui/style.css";
-import { mountGame } from "./ui/render";
+import { mountApp } from "./ui/app";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
-mountGame(app);
+mountApp(app);
