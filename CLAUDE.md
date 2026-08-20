@@ -4,10 +4,11 @@ A browser-based card game: classic Klondike solitaire reframed as a roguelike
 run. Play a hand, hit a score target, draft a power-up, repeat — difficulty
 escalates each round until you run out of lives.
 
-Status: **scaffolded** — Vite + TypeScript project is set up and builds,
-but no gameplay is implemented yet. This file is the source of truth for
-scope and design so a future session (or Claude Code) can pick it up and
-start building without re-deriving decisions.
+Status: **playable single hand, with scoring** — a full hand of Klondike
+deals and plays, scores per CLAUDE.md's rules, and supports undo. The
+roguelike layer (lives, rounds, power-ups) isn't built yet. This file is
+the source of truth for scope and design so a future session (or Claude
+Code) can pick it up and start building without re-deriving decisions.
 
 ## Git workflow
 
@@ -32,10 +33,37 @@ start building without re-deriving decisions.
   meant to be a real codebase the user keeps and extends.
 - Stack: Vite + TypeScript, vanilla DOM (no framework). The game state is
   small enough that React/etc. would be overhead, not help.
-- Interaction model: **click-to-select, click-to-move** (select a card or
-  stack, then click a destination). Simpler and more reliable to build
-  correctly than full drag-and-drop; drag-and-drop can be added later as
-  a pure UX layer on top of the same move-validation logic.
+- Interaction model: **click-to-select, click-to-move**, plus a **smart
+  click** shortcut layered on top — clicking a card sends it straight to
+  its destination when there's exactly one legal home (its foundation,
+  or a single valid tableau column); if the destination is ambiguous or
+  there isn't one, it falls back to select-then-click-destination so the
+  player keeps full control over genuinely ambiguous moves. Full
+  drag-and-drop is still a possible later addition as a pure UX layer on
+  top of the same move-validation logic, but isn't built.
+- **Animations** (card flips, move transitions, drag feedback, and
+  **victory animations** — e.g. the classic cascading-cards celebration
+  when all 4 foundations complete) belong in that same UX layer —
+  presentation-only, no game-logic changes needed, since `render.ts`
+  already derives everything from `GameState` and `isWon()` already
+  detects the win. Not built yet, and not a drop-in addition: `draw()`
+  currently does a full `root.innerHTML = ""` teardown/rebuild on every
+  move, so there's no DOM continuity between old and new card positions
+  for a transition to animate between. Adding real animations means
+  reworking `render()` to diff/reuse DOM nodes (e.g. keyed by card `id`)
+  instead of wiping and rebuilding, then layering CSS transitions on top
+  — worth its own pass, not a quick add-on alongside other work. (A
+  simple entrance animation on the existing win banner itself wouldn't
+  need this rework, since it's a one-off overlay rather than a
+  transition between two card layouts — but a true cascade would.)
+- **Undo** is unlimited in the base game (no per-round resource limit
+  yet) — click Undo to step back one move at a time, score included.
+  This is deliberately a base-game convenience, not a final balance
+  decision: the roguelike layer already plans an "Extra Undo" power-up
+  (see Power-ups below), which implies undos should become a **limited
+  per-round resource** once `roguelike.ts` exists, with a base allotment
+  smaller than "unlimited." Revisit the default undo count per round
+  when building step 4.
 
 ## Core loop
 
@@ -81,7 +109,10 @@ Each round win offers a choice of 3, drawn randomly from the pool below.
 Power-ups persist for the rest of the run (stack across rounds) unless
 noted as consumable.
 
-1. **Extra Undo** — +1 undo available per round
+1. **Extra Undo** — +1 undo available per round (the base game currently
+   has *unlimited* undo with no per-round cap — see the Undo note under
+   "Decisions already made"; this power-up only becomes meaningful once
+   `roguelike.ts` caps the base allotment)
 2. **Extra Redeal** — +1 stock redeal per round
 3. **Peek Stock** — reveal the next 3 cards in the stock pile
 4. **Wild Card** (consumable) — one card usable as any rank/suit,
@@ -111,7 +142,8 @@ klondike-roguelike/
       cards.test.ts
       klondike.ts         # tableau/foundation/stock state + move validation
       klondike.test.ts
-      scoring.ts          # scoring + combo logic (not yet built)
+      scoring.ts          # scoring + combo logic
+      scoring.test.ts
       roguelike.ts         # run state: lives, round number, target, draft pool (not yet built)
       powerups.ts           # power-up definitions + effects (not yet built)
     ui/                 # DOM rendering, click handlers, styling
@@ -144,11 +176,13 @@ module they test. `game/` holds framework-free logic (no DOM access);
 ## Next steps when building resumes
 
 1. ~~Scaffold with `npm create vite@latest solitaire-roguelike -- --template vanilla-ts`~~ done
-2. Implement `cards.ts` + `klondike.ts` first, with the click-to-move
+2. ~~Implement `cards.ts` + `klondike.ts` first, with the click-to-move
    UI, and get a fully playable single hand of standard Klondike
-   working (no roguelike layer yet) — validate this is fun/correct
-   before layering the run structure on top
-3. Add `scoring.ts` and a visible score/target HUD
-4. Add `roguelike.ts` round loop (target, lives, win/loss transition)
+   working (no roguelike layer yet)~~ done — also picked up a smart-click
+   auto-move shortcut and an unlimited base-game Undo along the way
+3. ~~Add `scoring.ts` and a visible score HUD~~ done (score only for
+   now — the round *target* half of the HUD needs `roguelike.ts`, step 4)
+4. Add `roguelike.ts` round loop (target, lives, win/loss transition).
+   Decide the default undos-per-round here (see the Undo note above)
 5. Add `powerups.ts` and the draft screen between rounds
 6. Playtest and tune numbers

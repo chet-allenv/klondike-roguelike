@@ -19,6 +19,19 @@ body {
   color: #f0f0f0;
 }
 
+.hud {
+  display: flex;
+  gap: 16px;
+  align-items: baseline;
+  width: min(100%, 900px);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.hud .combo {
+  color: #ffd54a;
+}
+
 .board {
   display: flex;
   flex-direction: column;
@@ -117,13 +130,32 @@ body {
   color: #ffd54a;
 }
 
-.new-game {
+.controls {
+  display: flex;
+  gap: 12px;
+}
+
+.new-game,
+.undo {
   padding: 8px 16px;
   font-size: 15px;
   border-radius: 6px;
   border: none;
   cursor: pointer;
+  font-weight: 600;
+}
+
+.new-game {
   background: #ffd54a;
   color: #1a1a1a;
-  font-weight: 600;
+}
+
+.undo {
+  background: rgba(255, 255, 255, 0.15);
+  color: #f0f0f0;
+}
+
+.undo:disabled {
+  opacity: 0.4;
+  cursor: default;
 }

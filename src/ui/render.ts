@@ -1,14 +1,20 @@
 import { type Card, rankLabel, SUIT_SYMBOL, isRed, SUITS } from "../game/cards";
 import {
+  canPlaceOnFoundation,
+  canPlaceOnTableau,
+  cloneState,
   dealNewGame,
-  isWon,
   drawFromStock,
-  moveWasteToTableau,
-  moveWasteToFoundation,
+  type GameState,
+  isWon,
   moveFoundationToTableau,
   moveTableauToTableau,
   moveTableauToFoundation,
+  moveWasteToFoundation,
+  moveWasteToTableau,
+  willReveal,
 } from "../game/klondike";
+import { applyScoreEvent, createScoreState, type ScoreState } from "../game/scoring";
 
 type Selection =
   | { kind: "tableau"; col: number; cardIndex: number }
@@ -16,9 +22,28 @@ type Selection =
   | { kind: "foundation"; suit: (typeof SUITS)[number] }
   | null;
 
-export function mountGame(root: HTMLElement): void {
-  let state = dealNewGame();
+interface Snapshot {
+  state: GameState;
+  score: ScoreState;
+}
+
+export function mountGame(root: HTMLElement, initialState: GameState = dealNewGame()): void {
+  let state = initialState;
+  let score = createScoreState();
   let selection: Selection = null;
+  let history: Snapshot[] = [];
+
+  function snapshot(): Snapshot {
+    return { state: cloneState(state), score: { ...score } };
+  }
+
+  // Commits a snapshot taken *before* a successful mutation, so it can be
+  // restored by Undo, then clears selection and re-renders.
+  function commit(prev: Snapshot) {
+    history.push(prev);
+    selection = null;
+    draw();
+  }
 
   function select(next: NonNullable<Selection>) {
     const current = selection;
@@ -35,37 +60,121 @@ export function mountGame(root: HTMLElement): void {
     return a.kind === "waste" && b.kind === "waste";
   }
 
+  function doMoveWasteToFoundation(): boolean {
+    const prev = snapshot();
+    if (!moveWasteToFoundation(state)) return false;
+    score = applyScoreEvent(score, "foundation-play");
+    commit(prev);
+    return true;
+  }
+
+  function doMoveWasteToTableau(col: number): boolean {
+    const prev = snapshot();
+    if (!moveWasteToTableau(state, col)) return false;
+    score = applyScoreEvent(score, "waste-to-tableau");
+    commit(prev);
+    return true;
+  }
+
+  function doMoveFoundationToTableau(suit: (typeof SUITS)[number], col: number): boolean {
+    const prev = snapshot();
+    if (!moveFoundationToTableau(state, suit, col)) return false;
+    score = applyScoreEvent(score, "foundation-to-tableau");
+    commit(prev);
+    return true;
+  }
+
+  function doMoveTableauToTableau(fromCol: number, cardIndex: number, toCol: number): boolean {
+    const prev = snapshot();
+    const revealed = willReveal(state.tableau[fromCol], cardIndex);
+    if (!moveTableauToTableau(state, fromCol, cardIndex, toCol)) return false;
+    if (revealed) score = applyScoreEvent(score, "reveal");
+    score = applyScoreEvent(score, "tableau-to-tableau");
+    commit(prev);
+    return true;
+  }
+
+  function doMoveTableauToFoundation(col: number): boolean {
+    const prev = snapshot();
+    const column = state.tableau[col];
+    const revealed = willReveal(column, column.length - 1);
+    if (!moveTableauToFoundation(state, col)) return false;
+    if (revealed) score = applyScoreEvent(score, "reveal");
+    score = applyScoreEvent(score, "foundation-play");
+    commit(prev);
+    return true;
+  }
+
+  /**
+   * "Smart click": if the clicked card has exactly one legal home (its
+   * foundation, or a single valid tableau column), send it there directly
+   * instead of requiring a manual select-then-click-destination. Falls back
+   * (returns false) when the destination is ambiguous or there isn't one,
+   * so the player can still choose manually.
+   */
+  function tryAutoMove(
+    card: Card,
+    source: { kind: "waste" } | { kind: "tableau"; col: number; cardIndex: number },
+  ): boolean {
+    const isRun = source.kind === "tableau" && source.cardIndex < state.tableau[source.col].length - 1;
+
+    if (!isRun && canPlaceOnFoundation(card, state)) {
+      return source.kind === "waste" ? doMoveWasteToFoundation() : doMoveTableauToFoundation(source.col);
+    }
+
+    const excludeCol = source.kind === "tableau" ? source.col : -1;
+    const legalCols: number[] = [];
+    for (let col = 0; col < state.tableau.length; col++) {
+      if (col === excludeCol) continue;
+      if (canPlaceOnTableau(card, state.tableau[col])) legalCols.push(col);
+    }
+
+    if (legalCols.length === 1) {
+      const [col] = legalCols;
+      return source.kind === "waste"
+        ? doMoveWasteToTableau(col)
+        : doMoveTableauToTableau(source.col, source.cardIndex, col);
+    }
+
+    return false;
+  }
+
   function attemptMoveTo(target: { kind: "tableau"; col: number } | { kind: "foundation" }) {
     if (!selection) return;
     let moved = false;
 
     if (selection.kind === "waste") {
-      moved =
-        target.kind === "tableau"
-          ? moveWasteToTableau(state, target.col)
-          : moveWasteToFoundation(state);
+      moved = target.kind === "tableau" ? doMoveWasteToTableau(target.col) : doMoveWasteToFoundation();
     } else if (selection.kind === "tableau") {
       moved =
         target.kind === "tableau"
-          ? moveTableauToTableau(state, selection.col, selection.cardIndex, target.col)
-          : moveTableauToFoundation(state, selection.col);
+          ? doMoveTableauToTableau(selection.col, selection.cardIndex, target.col)
+          : doMoveTableauToFoundation(selection.col);
     } else if (selection.kind === "foundation") {
-      moved = target.kind === "tableau" && moveFoundationToTableau(state, selection.suit, target.col);
+      moved = target.kind === "tableau" && doMoveFoundationToTableau(selection.suit, target.col);
     }
 
-    selection = null;
-    if (moved) draw();
-    else draw();
+    if (!moved) {
+      selection = null;
+      draw();
+    }
   }
 
   function handleStockClick() {
-    selection = null;
+    const prev = snapshot();
     drawFromStock(state);
+    history.push(prev);
+    selection = null;
     draw();
   }
 
   function handleWasteClick() {
-    if (state.waste.length === 0) return;
+    const card = state.waste[state.waste.length - 1];
+    if (!card) return;
+
+    const alreadySelected = selection?.kind === "waste";
+    if (!alreadySelected && tryAutoMove(card, { kind: "waste" })) return;
+
     select({ kind: "waste" });
   }
 
@@ -81,6 +190,11 @@ export function mountGame(root: HTMLElement): void {
     const card = column[cardIndex];
     if (!card.faceUp) return;
 
+    const alreadySelected =
+      selection?.kind === "tableau" && selection.col === col && selection.cardIndex === cardIndex;
+
+    if (!alreadySelected && tryAutoMove(card, { kind: "tableau", col, cardIndex })) return;
+
     select({ kind: "tableau", col, cardIndex });
   }
 
@@ -92,8 +206,19 @@ export function mountGame(root: HTMLElement): void {
     if (state.foundations[suit].length > 0) select({ kind: "foundation", suit });
   }
 
+  function handleUndo() {
+    const prev = history.pop();
+    if (!prev) return;
+    state = prev.state;
+    score = prev.score;
+    selection = null;
+    draw();
+  }
+
   function handleNewGame() {
     state = dealNewGame();
+    score = createScoreState();
+    history = [];
     selection = null;
     draw();
   }
@@ -109,6 +234,14 @@ export function mountGame(root: HTMLElement): void {
 
   function draw(): void {
     root.innerHTML = "";
+
+    const hud = document.createElement("div");
+    hud.className = "hud";
+    hud.innerHTML = `<span class="score">Score: ${score.total}</span>`;
+    if (score.comboStreak > 1) {
+      hud.innerHTML += `<span class="combo">Combo x${score.comboStreak}</span>`;
+    }
+    root.appendChild(hud);
 
     const board = document.createElement("div");
     board.className = "board";
@@ -203,11 +336,23 @@ export function mountGame(root: HTMLElement): void {
       root.appendChild(banner);
     }
 
+    const controls = document.createElement("div");
+    controls.className = "controls";
+
+    const undoBtn = document.createElement("button");
+    undoBtn.className = "undo";
+    undoBtn.textContent = "Undo";
+    undoBtn.disabled = history.length === 0;
+    undoBtn.addEventListener("click", handleUndo);
+    controls.appendChild(undoBtn);
+
     const newGameBtn = document.createElement("button");
     newGameBtn.className = "new-game";
     newGameBtn.textContent = "New Game";
     newGameBtn.addEventListener("click", handleNewGame);
-    root.appendChild(newGameBtn);
+    controls.appendChild(newGameBtn);
+
+    root.appendChild(controls);
   }
 
   draw();

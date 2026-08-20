@@ -3,6 +3,7 @@ import type { Card, Suit } from "./cards";
 import {
   canPlaceOnFoundation,
   canPlaceOnTableau,
+  cloneState,
   dealNewGame,
   drawFromStock,
   type GameState,
@@ -12,6 +13,7 @@ import {
   moveTableauToTableau,
   moveWasteToFoundation,
   moveWasteToTableau,
+  willReveal,
 } from "./klondike";
 
 function card(suit: Suit, rank: number, faceUp = true): Card {
@@ -262,5 +264,42 @@ describe("isWon", () => {
       state.foundations[suit] = Array.from({ length: 13 }, (_, i) => card(suit, i + 1));
     }
     expect(isWon(state)).toBe(true);
+  });
+});
+
+describe("cloneState", () => {
+  it("produces a deep, independent copy", () => {
+    const state = emptyState();
+    state.tableau[0] = [card("clubs", 8, false), card("hearts", 7)];
+    state.waste = [card("spades", 3)];
+
+    const clone = cloneState(state);
+    expect(clone).toEqual(state);
+    expect(clone).not.toBe(state);
+    expect(clone.tableau[0]).not.toBe(state.tableau[0]);
+    expect(clone.tableau[0][0]).not.toBe(state.tableau[0][0]);
+
+    clone.tableau[0][1].faceUp = false;
+    clone.waste.push(card("diamonds", 1));
+
+    expect(state.tableau[0][1].faceUp).toBe(true);
+    expect(state.waste).toHaveLength(1);
+  });
+});
+
+describe("willReveal", () => {
+  it("is true when the card underneath is face down", () => {
+    const column = [card("clubs", 8, false), card("hearts", 7)];
+    expect(willReveal(column, 1)).toBe(true);
+  });
+
+  it("is false when the card underneath is already face up", () => {
+    const column = [card("clubs", 8, true), card("hearts", 7)];
+    expect(willReveal(column, 1)).toBe(false);
+  });
+
+  it("is false at the bottom of the column (nothing underneath)", () => {
+    const column = [card("clubs", 8)];
+    expect(willReveal(column, 0)).toBe(false);
   });
 });

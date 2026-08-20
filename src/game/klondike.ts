@@ -37,6 +37,32 @@ export function isWon(state: GameState): boolean {
   return SUITS.every((suit) => state.foundations[suit].length === 13);
 }
 
+/** Deep-clones a GameState so it can be snapshotted for undo without aliasing. */
+export function cloneState(state: GameState): GameState {
+  const cloneCards = (cards: Card[]) => cards.map((c) => ({ ...c }));
+  return {
+    tableau: state.tableau.map(cloneCards),
+    foundations: {
+      spades: cloneCards(state.foundations.spades),
+      hearts: cloneCards(state.foundations.hearts),
+      diamonds: cloneCards(state.foundations.diamonds),
+      clubs: cloneCards(state.foundations.clubs),
+    },
+    stock: cloneCards(state.stock),
+    waste: cloneCards(state.waste),
+  };
+}
+
+/**
+ * Would removing the run starting at `cardIndex` expose a face-down card
+ * underneath it? Used to award the tableau "reveal" score bonus without
+ * needing the move functions to report it themselves.
+ */
+export function willReveal(column: Card[], cardIndex: number): boolean {
+  const exposed = column[cardIndex - 1];
+  return exposed !== undefined && !exposed.faceUp;
+}
+
 /** Can `card` be placed on top of the given tableau column? */
 export function canPlaceOnTableau(card: Card, column: Card[]): boolean {
   if (column.length === 0) return card.rank === 13; // only Kings on empty columns
