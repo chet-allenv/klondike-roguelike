@@ -4,15 +4,25 @@ A browser-based card game: classic Klondike solitaire reframed as a roguelike
 run. Play a hand, hit a score target, draft a power-up, repeat — difficulty
 escalates each round until you run out of lives.
 
-Status: **planning only** — nothing has been scaffolded yet. This file is
-the source of truth for scope and design so a future session (or Claude
-Code) can pick it up and start building without re-deriving decisions.
+Status: **scaffolded** — Vite + TypeScript project is set up and builds,
+but no gameplay is implemented yet. This file is the source of truth for
+scope and design so a future session (or Claude Code) can pick it up and
+start building without re-deriving decisions.
 
 ## Git workflow
 
 - Commit changes with clear, meaningful commit messages as work is done.
 - **Never push to the remote.** Commits stay local until the user pushes
   them themselves.
+
+## Documentation workflow
+
+- Keep [README.md](./README.md)'s "Features" section up to date as
+  gameplay features land (e.g. "playable single-hand Klondike", "scoring
+  HUD", "roguelike round loop", "power-up drafting"). CLAUDE.md is the
+  design/scope doc for contributors picking up the project; README.md is
+  what a user or new machine needs to set up and see what currently
+  works.
 
 ## Decisions already made
 
@@ -119,7 +129,7 @@ solitaire-roguelike/
 
 ## Next steps when building resumes
 
-1. Scaffold with `npm create vite@latest solitaire-roguelike -- --template vanilla-ts`
+1. ~~Scaffold with `npm create vite@latest solitaire-roguelike -- --template vanilla-ts`~~ done
 2. Implement `cards.ts` + `klondike.ts` first, with the click-to-move
    UI, and get a fully playable single hand of standard Klondike
    working (no roguelike layer yet) — validate this is fun/correct
