@@ -11,9 +11,9 @@ start building without re-deriving decisions.
 
 ## Git workflow
 
-- Commit changes with clear, meaningful commit messages as work is done.
-- **Never push to the remote.** Commits stay local until the user pushes
-  them themselves.
+- **Do not create commits.** Stage changes (`git add`) and leave them
+  staged for the user to review and commit themselves.
+- **Never push to the remote.** Pushing is entirely the user's call.
 
 ## Documentation workflow
 

@@ -1,4 +1,5 @@
 import "./style.css";
+import { mountGame } from "./render";
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML = `<h1>Klondike Roguelike</h1>`;
+mountGame(app);
