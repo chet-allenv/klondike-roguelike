@@ -11,24 +11,45 @@ See [CLAUDE.md](./CLAUDE.md) for full design and scope notes.
 Requires [Node.js](https://nodejs.org/) 20+ and npm.
 
 ```sh
-npm install
+npm run setup
+```
+
+This installs dependencies and runs a typecheck + test pass to confirm
+the project works on your machine. (Equivalent to `npm install` if you'd
+rather do it manually.)
+
+```sh
 npm run dev
 ```
 
-This starts the Vite dev server (default: http://localhost:5173) with
-hot reload.
+Starts the Vite dev server (default: http://localhost:5173) with hot
+reload.
 
 ## Scripts
 
+- `npm run setup` — install dependencies and verify the project builds
+  and tests pass (for a fresh clone / new machine)
 - `npm run dev` — start the local dev server
 - `npm run build` — type-check and build a production bundle to `dist/`
 - `npm run preview` — serve the built `dist/` bundle locally
+- `npm run deploy` — build for production, then serve that build with
+  `preview` (no external hosting is configured yet — this just proves
+  the production bundle works)
+- `npm run test` — run the test suite once
+- `npm run test:watch` — run the test suite in watch mode
+- `npm run typecheck` — type-check without emitting/building
 
 ## Status
 
-Early scaffolding — the project structure is set up but gameplay isn't
-implemented yet. See CLAUDE.md's "Next steps" for the build order.
+Core Klondike is playable: a single hand deals and plays via
+click-to-select, click-to-move (stock/waste, tableau, foundations). The
+roguelike layer (lives, rounds, scoring, power-ups) isn't built yet —
+see CLAUDE.md's "Next steps" for the build order.
 
 ## Features
 
 - Project scaffolded with Vite + TypeScript (vanilla, no framework)
+- Playable single-hand Klondike: deal, draw/redeal stock, tableau ↔
+  foundation ↔ tableau moves, win detection, New Game
+- Test suite (Vitest) covering deck/card logic, move validation, and
+  board interaction

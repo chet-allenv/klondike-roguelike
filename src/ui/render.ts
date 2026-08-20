@@ -1,4 +1,4 @@
-import { type Card, rankLabel, SUIT_SYMBOL, isRed, SUITS } from "./cards";
+import { type Card, rankLabel, SUIT_SYMBOL, isRed, SUITS } from "../game/cards";
 import {
   dealNewGame,
   isWon,
@@ -8,7 +8,7 @@ import {
   moveFoundationToTableau,
   moveTableauToTableau,
   moveTableauToFoundation,
-} from "./klondike";
+} from "../game/klondike";
 
 type Selection =
   | { kind: "tableau"; col: number; cardIndex: number }

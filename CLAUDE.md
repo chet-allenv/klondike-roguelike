@@ -99,23 +99,37 @@ noted as consumable.
 This list is a starting point, not final — expect to add/cut during
 implementation once playtesting shows what's fun vs. broken.
 
-## Suggested file structure
+## File structure
 
 ```
-solitaire-roguelike/
+klondike-roguelike/
   index.html
   src/
-    main.ts          # bootstraps the app, owns top-level state machine
-    cards.ts          # Card model, deck construction/shuffle
-    klondike.ts        # tableau/foundation/stock state + move validation
-    scoring.ts         # scoring + combo logic
-    roguelike.ts       # run state: lives, round number, target, draft pool
-    powerups.ts        # power-up definitions + effects
-    render.ts           # DOM rendering, click handlers
-    style.css
+    main.ts            # bootstraps the app, owns top-level state machine
+    game/               # pure game logic, no DOM
+      cards.ts           # Card model, deck construction/shuffle
+      cards.test.ts
+      klondike.ts         # tableau/foundation/stock state + move validation
+      klondike.test.ts
+      scoring.ts          # scoring + combo logic (not yet built)
+      roguelike.ts         # run state: lives, round number, target, draft pool (not yet built)
+      powerups.ts           # power-up definitions + effects (not yet built)
+    ui/                 # DOM rendering, click handlers, styling
+      render.ts
+      render.test.ts
+      style.css
+  scripts/
+    setup.mjs           # `npm run setup` — installs deps, verifies build/tests
   package.json
   tsconfig.json
+  vitest.config.ts
 ```
+
+Tests are colocated with the file they cover (`foo.ts` + `foo.test.ts`)
+rather than mirrored into a separate tree — keep new tests next to the
+module they test. `game/` holds framework-free logic (no DOM access);
+`ui/` holds everything that touches `document`. New logic modules
+(`scoring.ts`, `roguelike.ts`, `powerups.ts`) belong in `game/`.
 
 ## Open questions for next session
 
