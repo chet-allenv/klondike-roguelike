@@ -184,5 +184,10 @@ module they test. `game/` holds framework-free logic (no DOM access);
    now — the round *target* half of the HUD needs `roguelike.ts`, step 4)
 4. Add `roguelike.ts` round loop (target, lives, win/loss transition).
    Decide the default undos-per-round here (see the Undo note above)
-5. Add `powerups.ts` and the draft screen between rounds
-6. Playtest and tune numbers
+5. **UX overhaul**: drag-and-drop and animations (card flips, move
+   transitions, drag feedback, victory cascade on a completed round) —
+   see the Animations note under "Decisions already made" for why this
+   needs a `render()` rework (keyed DOM diffing) rather than being a
+   quick add-on
+6. Add `powerups.ts` and the draft screen between rounds
+7. Playtest and tune numbers
