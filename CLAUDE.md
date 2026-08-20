@@ -46,8 +46,10 @@ building without re-deriving decisions.
   top of the same move-validation logic, but isn't built.
 - **Animations** are implemented via the **FLIP technique** (First-Last-
   Invert-Play), not DOM node reuse/diffing. `draw()` still does a full
-  `root.innerHTML = ""` teardown/rebuild every render — that didn't
-  change. What changed: before wiping, `captureCardRects()` snapshots
+  teardown/rebuild every render — that didn't change (it wipes a
+  `content` div now rather than `root` itself directly, purely so mount
+  setup has a stable node to attach `content` to once; nothing more).
+  What changed: before wiping, `captureCardRects()` snapshots
   every `[data-card-id]` element's `getBoundingClientRect()`; after the
   rebuild, `animateCardMoves()` finds each surviving card by that same
   `data-card-id`, and if its position moved, applies an inverse
@@ -73,6 +75,30 @@ building without re-deriving decisions.
   Drag-and-drop is still fully unbuilt — smart click / select-then-move
   remains the only interaction model; this was intentionally sequenced
   before drag-and-drop (see step 5 in Next Steps).
+  - Two issues found via real-browser playtesting (not caught by jsdom
+    tests, which don't do real layout). (1) The moving card had no
+    elevated `z-index` during flight, so depending on move direction it
+    could render *underneath* other cards/piles it passed near — fixed
+    by giving the animating card `z-index: 1000` for the flight and
+    restoring its resting z-index after (tableau cards also now get an
+    explicit `z-index: cardIndex` for deterministic cascade stacking,
+    rather than relying on DOM-order painting). (2) Waste/foundation
+    piles only ever rendered their single top card, so covering one
+    instantly dropped the old card from the DOM — first "fixed" with a
+    fade-out exit animation, but the user didn't like that (correctly:
+    a fade implies the card left, when it's just been covered) and
+    asked for it to visibly land on top instead. Actual fix: `.pile`
+    now renders up to *two* cards — the previous top one underneath
+    (still genuinely there, just covered) plus the new top one — instead
+    of ever swapping/removing the covered card. `.pile` and `.pile .card`
+    became `position: relative` / `position: absolute; top:0; left:0`
+    (mirroring `.column .card`) so the two cards genuinely overlap. No
+    exit animation needed at all: the covered card was already fully
+    hidden behind the top card even before this change (same size, same
+    position), so keeping it rendered has zero visual cost at rest — the
+    only thing it changes is that a new arrival now visibly lands on top
+    of *something* mid-flight instead of the slot looking momentarily
+    empty underneath it.
 - **Undo and redeals are capped per round** (`roguelike.ts`): 3 undos
   and 2 redeals per round by default (`UNDOS_PER_ROUND`,
   `REDEALS_PER_ROUND`), both picked as reasonable starting points, not

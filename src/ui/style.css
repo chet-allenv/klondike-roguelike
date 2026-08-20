@@ -59,18 +59,28 @@ body {
 .pile {
   width: 80px;
   height: 112px;
+  position: relative;
   border: 2px dashed rgba(255, 255, 255, 0.25);
   border-radius: 8px;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   font-size: 28px;
   color: rgba(255, 255, 255, 0.35);
 }
 
+.pile.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .pile.empty:hover {
   border-color: rgba(255, 255, 255, 0.5);
+}
+
+.pile .card {
+  position: absolute;
+  top: 0;
+  left: 0;
 }
 
 .column {

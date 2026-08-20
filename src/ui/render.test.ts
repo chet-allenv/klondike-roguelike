@@ -239,6 +239,34 @@ describe("animation cues", () => {
     expect(revealed?.getAttribute("data-card-id")).toBe("spades-9");
   });
 
+  it("keeps the covered waste card rendered underneath the new top card, instead of dropping it", () => {
+    const state = emptyState();
+    state.stock = [card("clubs", 5), card("hearts", 9)]; // hearts-9 drawn first, then clubs-5
+    mount(state);
+
+    click(".pile.stock"); // waste: [hearts-9], visible top is hearts-9
+    click(".pile.stock"); // waste: [hearts-9, clubs-5], visible top is now clubs-5
+
+    const wasteCards = root.querySelectorAll(".pile.waste .card");
+    expect(wasteCards).toHaveLength(2);
+    expect(wasteCards[0].getAttribute("data-card-id")).toBe("hearts-9"); // covered, still present
+    expect(wasteCards[1].getAttribute("data-card-id")).toBe("clubs-5"); // on top
+  });
+
+  it("keeps the covered foundation card rendered underneath the new top card", () => {
+    const state = emptyState();
+    state.foundations.hearts = [card("hearts", 1)];
+    state.waste = [card("hearts", 2)];
+    mount(state);
+
+    click(".pile.waste"); // hearts-2 auto-moves onto the hearts foundation
+
+    const foundationCards = root.querySelectorAll(".pile.foundation .card");
+    expect(foundationCards).toHaveLength(2);
+    expect(foundationCards[0].getAttribute("data-card-id")).toBe("hearts-1");
+    expect(foundationCards[1].getAttribute("data-card-id")).toBe("hearts-2");
+  });
+
   it("celebrates on the win banner and foundations when the hand is won", () => {
     const state = emptyState();
     for (const suit of ["spades", "hearts", "diamonds"] as const) {

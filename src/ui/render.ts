@@ -39,9 +39,9 @@ function prefersReducedMotion(): boolean {
 }
 
 /** Snapshots the viewport position of every rendered card, keyed by card id. */
-function captureCardRects(root: HTMLElement): Map<string, DOMRect> {
+function captureCardRects(content: HTMLElement): Map<string, DOMRect> {
   const rects = new Map<string, DOMRect>();
-  root.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => {
+  content.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => {
     const id = el.dataset.cardId;
     if (id) rects.set(id, el.getBoundingClientRect());
   });
@@ -55,10 +55,10 @@ function captureCardRects(root: HTMLElement): Map<string, DOMRect> {
  * appears to slide from its old spot to its new one, without ever having to
  * reuse or diff DOM nodes across renders.
  */
-function animateCardMoves(root: HTMLElement, firstRects: Map<string, DOMRect>): void {
-  const moved: { el: HTMLElement; dx: number; dy: number }[] = [];
+function animateCardMoves(content: HTMLElement, firstRects: Map<string, DOMRect>): void {
+  const moved: { el: HTMLElement; restoreZIndex: string }[] = [];
 
-  root.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => {
+  content.querySelectorAll<HTMLElement>("[data-card-id]").forEach((el) => {
     const id = el.dataset.cardId;
     const first = id && firstRects.get(id);
     if (!first) return;
@@ -68,18 +68,27 @@ function animateCardMoves(root: HTMLElement, firstRects: Map<string, DOMRect>): 
     const dy = first.top - last.top;
     if (dx === 0 && dy === 0) return;
 
+    // This draw() already gave the card its resting z-index (e.g. its
+    // cascade position in a tableau column) — remember it so it can be
+    // restored, rather than cleared, once the flight is over.
+    const restoreZIndex = el.style.zIndex;
+
     el.style.transition = "none";
     el.style.transform = `translate(${dx}px, ${dy}px)`;
-    moved.push({ el, dx, dy });
+    // Above everything else for the duration of the flight, regardless of
+    // which pile/column it's landing on or passing over.
+    el.style.zIndex = "1000";
+    moved.push({ el, restoreZIndex });
   });
 
   if (moved.length === 0) return;
 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      for (const { el } of moved) {
+      for (const { el, restoreZIndex } of moved) {
         el.style.transition = "";
         el.style.transform = "";
+        el.style.zIndex = restoreZIndex;
       }
     });
   });
@@ -135,6 +144,10 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
   let previousFaceUp = new Map<string, boolean>();
   let nextFaceUp = new Map<string, boolean>();
   let previousWon = false;
+
+  root.innerHTML = "";
+  const content = document.createElement("div");
+  root.appendChild(content);
 
   function snapshot(): Snapshot {
     return { state: cloneState(state), score: { ...score }, redealsUsed: roundState.redealsUsed };
@@ -367,11 +380,11 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
   }
 
   function draw(): void {
-    const firstRects = captureCardRects(root);
+    const firstRects = captureCardRects(content);
     nextFaceUp = new Map();
     const justWon = !reduceMotion && isWon(state) && !previousWon;
 
-    root.innerHTML = "";
+    content.innerHTML = "";
 
     const hud = document.createElement("div");
     hud.className = "hud";
@@ -390,7 +403,7 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
       const undosLeft = roundState.undosAllowed - roundState.undosUsed;
       hud.innerHTML += `<span class="undos-left">Undos left: ${undosLeft}</span>`;
     }
-    root.appendChild(hud);
+    content.appendChild(hud);
 
     const board = document.createElement("div");
     board.className = "board";
@@ -410,14 +423,16 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     stockPile.addEventListener("click", handleStockClick);
     topRow.appendChild(stockPile);
 
-    // Waste
+    // Waste. Renders the card underneath the top one too (still there,
+    // just covered) so a new draw visibly lands on top of it instead of
+    // the previous top card seeming to vanish/get swapped out.
     const wastePile = document.createElement("div");
     wastePile.className = "pile waste";
     const wasteTop = state.waste[state.waste.length - 1];
+    const wasteUnder = state.waste[state.waste.length - 2];
     if (wasteTop) {
-      wastePile.appendChild(
-        renderCard(wasteTop, true, selection?.kind === "waste"),
-      );
+      if (wasteUnder) wastePile.appendChild(renderCard(wasteUnder, true, false));
+      wastePile.appendChild(renderCard(wasteTop, true, selection?.kind === "waste"));
     } else {
       wastePile.classList.add("empty");
     }
@@ -426,13 +441,15 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
 
     topRow.appendChild(document.createElement("div")).className = "spacer";
 
-    // Foundations
+    // Foundations. Same "show the covered card too" approach as waste.
     SUITS.forEach((suit, suitIndex) => {
       const pile = document.createElement("div");
       pile.className = "pile foundation";
       const cards = state.foundations[suit];
       const top = cards[cards.length - 1];
+      const under = cards[cards.length - 2];
       if (top) {
+        if (under) pile.appendChild(renderCard(under, true, false));
         pile.appendChild(renderCard(top, true, selection?.kind === "foundation" && selection.suit === suit));
       } else {
         pile.classList.add("empty");
@@ -466,6 +483,7 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
             selection?.kind === "tableau" && selection.col === col && cardIndex >= selection.cardIndex;
           const cardEl = renderCard(card, card.faceUp, selected);
           cardEl.style.top = `${cardIndex * 24}px`;
+          cardEl.style.zIndex = String(cardIndex);
           cardEl.addEventListener("click", (e) => {
             e.stopPropagation();
             handleTableauClick(col, cardIndex);
@@ -480,13 +498,13 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     });
     board.appendChild(tableauRow);
 
-    root.appendChild(board);
+    content.appendChild(board);
 
     if (isWon(state)) {
       const banner = document.createElement("div");
       banner.className = justWon ? "win-banner celebrating" : "win-banner";
       banner.textContent = "You win!";
-      root.appendChild(banner);
+      content.appendChild(banner);
     }
 
     const controls = document.createElement("div");
@@ -508,11 +526,11 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
       controls.appendChild(newGameBtn);
     }
 
-    root.appendChild(controls);
+    content.appendChild(controls);
 
     previousFaceUp = nextFaceUp;
     previousWon = isWon(state);
-    if (!reduceMotion) animateCardMoves(root, firstRects);
+    if (!reduceMotion) animateCardMoves(content, firstRects);
 
     checkHandEnd();
   }
