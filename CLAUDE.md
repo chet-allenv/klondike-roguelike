@@ -8,6 +8,12 @@ Status: **planning only** — nothing has been scaffolded yet. This file is
 the source of truth for scope and design so a future session (or Claude
 Code) can pick it up and start building without re-deriving decisions.
 
+## Git workflow
+
+- Commit changes with clear, meaningful commit messages as work is done.
+- **Never push to the remote.** Commits stay local until the user pushes
+  them themselves.
+
 ## Decisions already made
 
 - Base game: **Klondike** (draw pile, 7 tableau columns, 4 foundations,
