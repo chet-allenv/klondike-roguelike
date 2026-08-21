@@ -68,6 +68,23 @@ function parseDropTarget(value: string): DropTarget | null {
   return null;
 }
 
+/**
+ * A labelled box around one region of the board. The label is absolutely
+ * positioned over the top border and painted in the table color, so it
+ * knocks a gap in the line rather than sitting on it — and being out of
+ * flow, it never counts as a child of the row it labels (several tests and
+ * the cascade rely on columns being the only children of `.tableau-row`).
+ */
+function areaBox(name: string, label: string): HTMLElement {
+  const area = document.createElement("div");
+  area.className = `area area-${name}`;
+  const caption = document.createElement("span");
+  caption.className = "area-label";
+  caption.textContent = label;
+  area.appendChild(caption);
+  return area;
+}
+
 function sameDropTarget(a: DropTarget, b: DropTarget): boolean {
   if (a.kind === "foundation" && b.kind === "foundation") return a.suit === b.suit;
   if (a.kind === "tableau" && b.kind === "tableau") return a.col === b.col;
@@ -713,6 +730,7 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     topRow.className = "top-row";
 
     // Stock
+    const deckArea = areaBox("deck", "Deck");
     const stockPile = document.createElement("div");
     stockPile.className = "pile stock";
     if (state.stock.length > 0) {
@@ -722,7 +740,8 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
       stockPile.textContent = "↻";
     }
     stockPile.addEventListener("click", handleStockClick);
-    topRow.appendChild(stockPile);
+    deckArea.appendChild(stockPile);
+    topRow.appendChild(deckArea);
 
     // Waste. Renders the card underneath the top one too (still there,
     // just covered) so a new draw visibly lands on top of it instead of
@@ -740,11 +759,14 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
       wastePile.classList.add("empty");
     }
     wastePile.addEventListener("click", handleWasteClick);
-    topRow.appendChild(wastePile);
+    const wasteArea = areaBox("waste", "Waste");
+    wasteArea.appendChild(wastePile);
+    topRow.appendChild(wasteArea);
 
     topRow.appendChild(document.createElement("div")).className = "spacer";
 
     // Foundations. Same "show the covered card too" approach as waste.
+    const foundationArea = areaBox("foundations", "Foundations");
     SUITS.forEach((suit, suitIndex) => {
       const pile = document.createElement("div");
       pile.className = "pile foundation";
@@ -766,12 +788,14 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
         pile.style.animationDelay = `${suitIndex * 90}ms`;
       }
       pile.addEventListener("click", () => handleFoundationClick(suit));
-      topRow.appendChild(pile);
+      foundationArea.appendChild(pile);
     });
+    topRow.appendChild(foundationArea);
 
     board.appendChild(topRow);
 
     // Tableau
+    const tableauArea = areaBox("tableau", "Tableau");
     const tableauRow = document.createElement("div");
     tableauRow.className = "tableau-row";
     state.tableau.forEach((column, col) => {
@@ -813,7 +837,8 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
 
       tableauRow.appendChild(colEl);
     });
-    board.appendChild(tableauRow);
+    tableauArea.appendChild(tableauRow);
+    board.appendChild(tableauArea);
 
     content.appendChild(board);
 

@@ -39,6 +39,14 @@ building without re-deriving decisions.
   small enough that React/etc. would be overhead, not help.
 - Interaction model: **click-to-select, click-to-move**, plus
   drag-and-drop (below). Both are always available; the player picks.
+- **Board regions are labelled** — Deck, Waste, Foundations and Tableau
+  each render inside an `.area` box (built by `areaBox()` in `render.ts`)
+  with an `.area-label` absolutely positioned over the top border and
+  painted `--table-green`, which is what knocks the gap in the line.
+  The label is deliberately *outside* `.tableau-row`, since the cascade
+  and a number of test selectors depend on columns being that row's only
+  children. Purely presentational — no drop zone or handler lives on it
+  (`pointer-events: none`).
 - **Play assists are opt-in, and off by default** (`Assists` in
   `render.ts`, passed via `MountOptions.assists`). Two things that used to
   be baseline behavior are now gated behind this:

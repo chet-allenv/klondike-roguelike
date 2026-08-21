@@ -1,6 +1,9 @@
 :root {
   color-scheme: dark;
   font-family: system-ui, sans-serif;
+  /* Shared by the table and the area labels that notch into their borders —
+     the two have to match exactly or the gap in the line shows a seam. */
+  --table-green: #0b3d1e;
 }
 
 * {
@@ -15,7 +18,7 @@ body {
   align-items: center;
   gap: 16px;
   padding: 24px;
-  background: #0b3d1e;
+  background: var(--table-green);
   color: #f0f0f0;
 }
 
@@ -42,14 +45,48 @@ body {
 .board {
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 24px;
   width: min(100%, 900px);
+  /* The area labels ride ~7px above their boxes and paint an opaque
+     background, so without this the top row's labels cover the bottom of
+     the HUD sitting directly above the board. */
+  padding-top: 14px;
 }
 
 .top-row,
 .tableau-row {
   display: flex;
   gap: 12px;
+}
+
+/* A labelled box around one region of the board (deck, waste, foundations,
+   tableau) so each area is named on screen. */
+.area {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  padding: 16px 12px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+}
+
+/*
+ * Rides on top of the box's border painted in the table color, which is what
+ * knocks the gap in the line. Out of flow, so it never shifts the piles it
+ * labels or counts as a child of the row inside.
+ */
+.area-label {
+  position: absolute;
+  top: -7px;
+  left: 12px;
+  padding: 0 6px;
+  background: var(--table-green);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(240, 240, 240, 0.55);
+  pointer-events: none;
 }
 
 .spacer {

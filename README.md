@@ -54,6 +54,8 @@ round — see CLAUDE.md's "Next steps" for the build order.
 - Full Klondike hand: deal, draw/redeal stock, tableau ↔ foundation ↔
   tableau moves, win detection
 - Click a card to select it, then click where it goes
+- Named board areas: Deck, Waste, Foundations and Tableau each sit in a
+  labelled box, so it's clear what each region is
 - Scoring HUD (foundation plays, reveals, waste moves, combo streak,
   foundation-to-tableau penalty) per CLAUDE.md's scoring rules
 - Undo button, capped at 3 per round (unlimited in freeplay)

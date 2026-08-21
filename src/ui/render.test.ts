@@ -55,6 +55,14 @@ describe("mountGame — initial render", () => {
     expect(root.querySelectorAll(".tableau-row .column")).toHaveLength(7);
   });
 
+  it("wraps each region of the board in its own labelled box", () => {
+    const labels = Array.from(root.querySelectorAll(".area > .area-label")).map((el) => el.textContent);
+    expect(labels).toEqual(["Deck", "Waste", "Foundations", "Tableau"]);
+    // The label must stay out of the row it names — the tableau cascade and
+    // several :nth-child selectors depend on columns being the only children.
+    expect(root.querySelector(".tableau-row > .area-label")).toBeNull();
+  });
+
   it("starts with an empty waste and a full stock", () => {
     expect(root.querySelector(".pile.waste")?.classList.contains("empty")).toBe(true);
     expect(root.querySelector(".pile.stock")?.classList.contains("empty")).toBe(false);
