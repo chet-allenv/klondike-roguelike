@@ -53,8 +53,7 @@ round — see CLAUDE.md's "Next steps" for the build order.
 - Project scaffolded with Vite + TypeScript (vanilla, no framework)
 - Full Klondike hand: deal, draw/redeal stock, tableau ↔ foundation ↔
   tableau moves, win detection
-- Smart click: clicking a card auto-moves it when it has exactly one
-  legal destination; falls back to select-then-click when ambiguous
+- Click a card to select it, then click where it goes
 - Scoring HUD (foundation plays, reveals, waste moves, combo streak,
   foundation-to-tableau penalty) per CLAUDE.md's scoring rules
 - Undo button, capped at 3 per round (unlimited in freeplay)
@@ -64,7 +63,13 @@ round — see CLAUDE.md's "Next steps" for the build order.
 - Animations: cards slide when moved (any pile to any pile), a subtle
   glow pulse when a face-down card is revealed, and a win celebration
   (banner pop + foundation glow) on victory. Respects
-  `prefers-reduced-motion`. Drag-and-drop isn't built — this is on top
-  of the existing click-to-move/smart-click interaction
+  `prefers-reduced-motion`
+- Drag-and-drop: pick up a card (or a whole tableau run) and drop it on
+  a column or foundation. An illegal drop flies the card home; Escape
+  cancels. Works with touch and pen as well as mouse
+- Play assists (auto-move on click, and highlighting legal drop targets)
+  are built but **off** — finding a card's destination yourself is the
+  puzzle. They're staged to become draftable power-ups; see the assists
+  note in [CLAUDE.md](./CLAUDE.md)
 - Test suite (Vitest) covering deck/card logic, move validation, round
   logic, scoring math, and board interaction

@@ -1,4 +1,4 @@
-import { type Card, rankLabel, SUIT_SYMBOL, isRed, SUITS } from "../game/cards";
+import { type Card, type Suit, rankLabel, SUIT_SYMBOL, isRed, SUITS } from "../game/cards";
 import {
   canPlaceOnFoundation,
   canPlaceOnTableau,
@@ -29,6 +29,50 @@ type Selection =
   | { kind: "waste" }
   | { kind: "foundation"; suit: (typeof SUITS)[number] }
   | null;
+
+/**
+ * Where a move can come from. Identical to a non-null `Selection` on
+ * purpose: a drag is just "select a source, then choose a destination"
+ * expressed with the pointer, so both interaction models feed the same
+ * `attemptMoveTo` and the same validators in klondike.ts.
+ */
+type DragSource = NonNullable<Selection>;
+
+/** Where a move can land. Rendered as `data-drop="tableau:3"` / `data-drop="foundation:hearts"`. */
+type DropTarget = { kind: "tableau"; col: number } | { kind: "foundation"; suit: Suit };
+
+/** How far the pointer must travel before a press counts as a drag rather than a click. */
+const DRAG_THRESHOLD_PX = 5;
+
+interface DragState {
+  source: DragSource;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  /** The card elements in flight — a tableau run is several cards at once. */
+  cards: HTMLElement[];
+  /** Fixed-position container the cards get lifted into. Null until the threshold is crossed. */
+  layer: HTMLElement | null;
+  /** Drop zones and their viewport rects, snapshotted once when the drag starts. */
+  zones: { el: HTMLElement; target: DropTarget; rect: DOMRect }[];
+  activeZone: HTMLElement | null;
+  activeTarget: DropTarget | null;
+  /** False while the press could still turn out to be a plain click. */
+  active: boolean;
+}
+
+function parseDropTarget(value: string): DropTarget | null {
+  const [kind, rest] = value.split(":");
+  if (kind === "tableau") return { kind: "tableau", col: Number(rest) };
+  if (kind === "foundation") return { kind: "foundation", suit: rest as Suit };
+  return null;
+}
+
+function sameDropTarget(a: DropTarget, b: DropTarget): boolean {
+  if (a.kind === "foundation" && b.kind === "foundation") return a.suit === b.suit;
+  if (a.kind === "tableau" && b.kind === "tableau") return a.col === b.col;
+  return false;
+}
 
 function prefersReducedMotion(): boolean {
   return (
@@ -105,9 +149,30 @@ export interface HandEndResult {
   score: number;
 }
 
+/**
+ * Optional play assists, both **off by default**. Working out where a card
+ * can go is the puzzle, so neither of these is baseline behavior — they're
+ * held back as future power-ups (see the Power-ups list in CLAUDE.md), which
+ * is why the code stays here fully wired rather than being deleted.
+ */
+export interface Assists {
+  /**
+   * Clicking a card sends it straight to its destination when exactly one
+   * is legal, instead of only selecting it.
+   */
+  smartClick?: boolean;
+  /**
+   * While dragging, every legal drop zone is outlined and the one under the
+   * pointer highlights — i.e. the game shows you the move before you commit.
+   */
+  dropHints?: boolean;
+}
+
 export interface MountOptions {
   /** Defaults to a fresh dealt hand. */
   initialState?: GameState;
+  /** Play assists to enable for this hand. Everything off when omitted. */
+  assists?: Assists;
   /** Caps stock redeals for the round. Omit for unlimited (freeplay). */
   redealsAllowed?: number;
   /** Caps undos for the round. Omit for unlimited (freeplay). */
@@ -126,7 +191,16 @@ export interface MountOptions {
 }
 
 export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
-  const { initialState = dealNewGame(), redealsAllowed, undosAllowed, target, roundInfo, onHandEnd } = options;
+  const {
+    initialState = dealNewGame(),
+    assists = {},
+    redealsAllowed,
+    undosAllowed,
+    target,
+    roundInfo,
+    onHandEnd,
+  } = options;
+  const { smartClick = false, dropHints = false } = assists;
 
   let state = initialState;
   let score = createScoreState();
@@ -144,10 +218,18 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
   let previousFaceUp = new Map<string, boolean>();
   let nextFaceUp = new Map<string, boolean>();
   let previousWon = false;
+  let drag: DragState | null = null;
+  // A completed drag is followed by the browser's synthetic click; without
+  // this the click would run smart-click on top of the move just made.
+  let swallowNextClick = false;
 
   root.innerHTML = "";
   const content = document.createElement("div");
   root.appendChild(content);
+  // Every fresh press starts a fresh interaction, so any click left over
+  // from a previous drag is stale by now. Capture phase so it runs before
+  // the per-card pointerdown handlers.
+  content.addEventListener("pointerdown", () => (swallowNextClick = false), true);
 
   function snapshot(): Snapshot {
     return { state: cloneState(state), score: { ...score }, redealsUsed: roundState.redealsUsed };
@@ -268,7 +350,7 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     return false;
   }
 
-  function attemptMoveTo(target: { kind: "tableau"; col: number } | { kind: "foundation" }) {
+  function attemptMoveTo(target: DropTarget) {
     if (!selection) return;
     let moved = false;
 
@@ -289,7 +371,223 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     }
   }
 
+  /** The card at the head of a drag — the one whose rank/suit decides legality. */
+  function sourceCard(source: DragSource): Card | undefined {
+    if (source.kind === "waste") return state.waste[state.waste.length - 1];
+    if (source.kind === "foundation") {
+      const pile = state.foundations[source.suit];
+      return pile[pile.length - 1];
+    }
+    return state.tableau[source.col]?.[source.cardIndex];
+  }
+
+  function canDropOn(source: DragSource, target: DropTarget): boolean {
+    const card = sourceCard(source);
+    if (!card) return false;
+
+    if (target.kind === "foundation") {
+      // Strict on purpose: this answers "can the card land *here*", so it's
+      // the card's own pile or nothing. Aiming at some other foundation is
+      // handled upstream by resolveDropTarget, which rewrites the target
+      // rather than loosening this check.
+      if (source.kind === "foundation" || target.suit !== card.suit) return false;
+      // Foundations take one card at a time, never a run.
+      if (source.kind === "tableau" && source.cardIndex !== state.tableau[source.col].length - 1) return false;
+      return canPlaceOnFoundation(card, state);
+    }
+
+    if (source.kind === "tableau" && source.col === target.col) return false;
+    return canPlaceOnTableau(card, state.tableau[target.col]);
+  }
+
+  /** Marks a card as a drag handle. `collect` resolves the full run at press time. */
+  function makeDraggable(el: HTMLElement, source: DragSource, collect: () => HTMLElement[]) {
+    el.classList.add("draggable");
+    el.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      if (drag) {
+        // The previous drag never got its pointerup — capture lost, or the
+        // window was switched away mid-flight. Put the board back and let
+        // the player press again rather than wedging on a stale drag.
+        cancelDrag(drag);
+        return;
+      }
+      if (ended) return;
+      drag = {
+        source,
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        cards: collect(),
+        layer: null,
+        zones: [],
+        activeZone: null,
+        activeTarget: null,
+        active: false,
+      };
+      // Keeps pointerup coming even if the button is released outside the
+      // window, so a card can't end up stuck to the cursor. Guarded because
+      // jsdom doesn't implement it.
+      try {
+        el.setPointerCapture?.(e.pointerId);
+      } catch {
+        /* capture is a nicety — the window listeners below do the real work */
+      }
+      window.addEventListener("pointermove", handleDragMove);
+      window.addEventListener("pointerup", handleDragEnd);
+      window.addEventListener("pointercancel", handleDragCancel);
+      window.addEventListener("keydown", handleDragKey);
+    });
+  }
+
+  /**
+   * Threshold crossed — this is a real drag. Lifts the card(s) out of the
+   * board into a fixed-position layer that tracks the pointer, and lights up
+   * every zone they could legally land on.
+   */
+  function activateDrag(d: DragState) {
+    d.active = true;
+
+    // Drag and click-to-select are two routes to the same move; starting one
+    // abandons the other. The drag always ends in a draw(), which resyncs the
+    // DOM, so clearing the classes by hand here is enough.
+    selection = null;
+    content.querySelectorAll(".card.selected").forEach((el) => el.classList.remove("selected"));
+
+    const layer = document.createElement("div");
+    layer.className = "drag-layer";
+    // Read every rect before detaching any card, so the run keeps its cascade.
+    const rects = d.cards.map((el) => el.getBoundingClientRect());
+    d.cards.forEach((el, i) => {
+      el.classList.add("dragging");
+      el.style.left = `${rects[i].left}px`;
+      el.style.top = `${rects[i].top}px`;
+      el.style.zIndex = String(i);
+      layer.appendChild(el);
+    });
+    // Inside `content` so the FLIP snapshot in draw() sees the cards at their
+    // dropped position — that's what makes them fly home or into place.
+    content.appendChild(layer);
+    d.layer = layer;
+
+    d.zones = [];
+    content.querySelectorAll<HTMLElement>("[data-drop]").forEach((el) => {
+      const target = parseDropTarget(el.dataset.drop ?? "");
+      if (!target) return;
+      d.zones.push({ el, target, rect: el.getBoundingClientRect() });
+      if (dropHints && canDropOn(d.source, target)) el.classList.add("drop-legal");
+    });
+
+    document.body.classList.add("dragging-card");
+  }
+
+  /**
+   * The four foundations act as one target: aim at any of them and the card
+   * goes to its own suit's pile. Only the pile it will actually land on is
+   * treated as the drop target — so `.drop-active` marks where the card
+   * ends up, not where you happened to point. Tableau columns are addressed
+   * literally; only foundations reroute.
+   */
+  function resolveDropTarget(source: DragSource, target: DropTarget): DropTarget {
+    if (target.kind !== "foundation") return target;
+    const card = sourceCard(source);
+    return card ? { kind: "foundation", suit: card.suit } : target;
+  }
+
+  function updateDropTarget(d: DragState, x: number, y: number) {
+    const hit = d.zones.find(
+      ({ rect }) => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom,
+    );
+    const resolved = hit && resolveDropTarget(d.source, hit.target);
+    const target =
+      resolved && canDropOn(d.source, resolved)
+        ? (d.zones.find((zone) => sameDropTarget(zone.target, resolved)) ?? null)
+        : null;
+    if ((target?.el ?? null) === d.activeZone) return;
+
+    // Tracking always runs — it's what the drop itself uses. Only the
+    // telling-the-player-about-it part is gated.
+    if (dropHints) {
+      d.activeZone?.classList.remove("drop-active");
+      target?.el.classList.add("drop-active");
+    }
+    d.activeZone = target?.el ?? null;
+    d.activeTarget = target?.target ?? null;
+  }
+
+  function handleDragMove(e: PointerEvent) {
+    const d = drag;
+    if (!d || e.pointerId !== d.pointerId) return;
+
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (!d.active) {
+      if (Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return;
+      activateDrag(d);
+    }
+
+    d.layer!.style.transform = `translate(${dx}px, ${dy}px)`;
+    updateDropTarget(d, e.clientX, e.clientY);
+  }
+
+  function handleDragEnd(e: PointerEvent) {
+    const d = drag;
+    if (!d || e.pointerId !== d.pointerId) return;
+    const target = d.activeTarget;
+    teardownDrag(d);
+
+    // Never crossed the threshold: leave it alone and let the browser's
+    // click through to the smart-click / select handlers.
+    if (!d.active) return;
+
+    swallowNextClick = true;
+    if (target && canDropOn(d.source, target)) {
+      selection = d.source;
+      attemptMoveTo(target);
+    } else {
+      draw(); // no legal target — the card flies back where it came from
+    }
+  }
+
+  function handleDragCancel(e: PointerEvent) {
+    const d = drag;
+    if (!d || e.pointerId !== d.pointerId) return;
+    cancelDrag(d);
+  }
+
+  function handleDragKey(e: KeyboardEvent) {
+    if (e.key !== "Escape" || !drag) return;
+    cancelDrag(drag);
+  }
+
+  function cancelDrag(d: DragState) {
+    teardownDrag(d);
+    if (!d.active) return;
+    swallowNextClick = true;
+    draw();
+  }
+
+  function teardownDrag(d: DragState) {
+    window.removeEventListener("pointermove", handleDragMove);
+    window.removeEventListener("pointerup", handleDragEnd);
+    window.removeEventListener("pointercancel", handleDragCancel);
+    window.removeEventListener("keydown", handleDragKey);
+    if (d.active) {
+      document.body.classList.remove("dragging-card");
+      for (const { el } of d.zones) el.classList.remove("drop-legal", "drop-active");
+    }
+    drag = null;
+  }
+
+  /** True when this click is the tail end of a drag and should be ignored. */
+  function isDragClick(): boolean {
+    if (!swallowNextClick) return false;
+    swallowNextClick = false;
+    return true;
+  }
+
   function handleStockClick() {
+    if (isDragClick()) return;
     if (!canDrawFromStock(state, roundState)) return;
 
     const prev = snapshot();
@@ -301,16 +599,18 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
   }
 
   function handleWasteClick() {
+    if (isDragClick()) return;
     const card = state.waste[state.waste.length - 1];
     if (!card) return;
 
     const alreadySelected = selection?.kind === "waste";
-    if (!alreadySelected && tryAutoMove(card, { kind: "waste" })) return;
+    if (smartClick && !alreadySelected && tryAutoMove(card, { kind: "waste" })) return;
 
     select({ kind: "waste" });
   }
 
   function handleTableauClick(col: number, cardIndex: number | null) {
+    if (isDragClick()) return;
     const column = state.tableau[col];
 
     if (selection && !(selection.kind === "tableau" && selection.col === col)) {
@@ -325,14 +625,15 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     const alreadySelected =
       selection?.kind === "tableau" && selection.col === col && selection.cardIndex === cardIndex;
 
-    if (!alreadySelected && tryAutoMove(card, { kind: "tableau", col, cardIndex })) return;
+    if (smartClick && !alreadySelected && tryAutoMove(card, { kind: "tableau", col, cardIndex })) return;
 
     select({ kind: "tableau", col, cardIndex });
   }
 
   function handleFoundationClick(suit: (typeof SUITS)[number]) {
+    if (isDragClick()) return;
     if (selection && !(selection.kind === "foundation" && selection.suit === suit)) {
-      attemptMoveTo({ kind: "foundation" });
+      attemptMoveTo({ kind: "foundation", suit });
       return;
     }
     if (state.foundations[suit].length > 0) select({ kind: "foundation", suit });
@@ -432,7 +733,9 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     const wasteUnder = state.waste[state.waste.length - 2];
     if (wasteTop) {
       if (wasteUnder) wastePile.appendChild(renderCard(wasteUnder, true, false));
-      wastePile.appendChild(renderCard(wasteTop, true, selection?.kind === "waste"));
+      const wasteTopEl = renderCard(wasteTop, true, selection?.kind === "waste");
+      makeDraggable(wasteTopEl, { kind: "waste" }, () => [wasteTopEl]);
+      wastePile.appendChild(wasteTopEl);
     } else {
       wastePile.classList.add("empty");
     }
@@ -445,12 +748,15 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     SUITS.forEach((suit, suitIndex) => {
       const pile = document.createElement("div");
       pile.className = "pile foundation";
+      pile.dataset.drop = `foundation:${suit}`;
       const cards = state.foundations[suit];
       const top = cards[cards.length - 1];
       const under = cards[cards.length - 2];
       if (top) {
         if (under) pile.appendChild(renderCard(under, true, false));
-        pile.appendChild(renderCard(top, true, selection?.kind === "foundation" && selection.suit === suit));
+        const topEl = renderCard(top, true, selection?.kind === "foundation" && selection.suit === suit);
+        makeDraggable(topEl, { kind: "foundation", suit }, () => [topEl]);
+        pile.appendChild(topEl);
       } else {
         pile.classList.add("empty");
         pile.textContent = SUIT_SYMBOL[suit];
@@ -471,6 +777,7 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     state.tableau.forEach((column, col) => {
       const colEl = document.createElement("div");
       colEl.className = "column";
+      colEl.dataset.drop = `tableau:${col}`;
 
       if (column.length === 0) {
         const dropZone = document.createElement("div");
@@ -478,6 +785,9 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
         dropZone.addEventListener("click", () => handleTableauClick(col, null));
         colEl.appendChild(dropZone);
       } else {
+        // Filled first, then wired for dragging: a face-up card drags the
+        // whole run below it, which isn't known until the column is built.
+        const cardEls: HTMLElement[] = [];
         column.forEach((card, cardIndex) => {
           const selected =
             selection?.kind === "tableau" && selection.col === col && cardIndex >= selection.cardIndex;
@@ -488,7 +798,14 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
             e.stopPropagation();
             handleTableauClick(col, cardIndex);
           });
+          cardEls.push(cardEl);
           colEl.appendChild(cardEl);
+        });
+        column.forEach((card, cardIndex) => {
+          if (!card.faceUp) return;
+          makeDraggable(cardEls[cardIndex], { kind: "tableau", col, cardIndex }, () =>
+            cardEls.slice(cardIndex),
+          );
         });
         colEl.style.height = `${140 + (column.length - 1) * 24}px`;
         colEl.addEventListener("click", () => handleTableauClick(col, null));

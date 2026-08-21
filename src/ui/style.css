@@ -131,6 +131,58 @@ body {
   transform: translateY(-4px);
 }
 
+.card.draggable {
+  cursor: grab;
+  /* Stops a touch drag from scrolling the page instead of moving the card. */
+  touch-action: none;
+}
+
+body.dragging-card,
+body.dragging-card .card.draggable {
+  cursor: grabbing;
+}
+
+/*
+ * Cards in flight are lifted out of the board into this layer: fixed at the
+ * viewport origin with zero size, so its children sit at raw viewport
+ * coordinates and the whole stack follows the pointer with one transform.
+ */
+.drag-layer {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 2000;
+}
+
+.drag-layer .card {
+  position: absolute;
+  margin: 0;
+}
+
+.card.dragging {
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.45);
+  /* The layer, not the card, follows the pointer — a transition here would lag it. */
+  transition: none;
+  cursor: grabbing;
+}
+
+/* Every zone the dragged card could legally land on. */
+.drop-legal {
+  outline: 2px dashed rgba(255, 213, 74, 0.45);
+  outline-offset: 4px;
+  border-radius: 10px;
+}
+
+/* ...and the one currently under the pointer. */
+.drop-active {
+  outline: 3px solid #7ee08a;
+  outline-offset: 4px;
+  box-shadow: 0 0 18px rgba(126, 224, 138, 0.55);
+}
+
 .card.empty-slot {
   border: 2px dashed rgba(255, 255, 255, 0.25);
   background: transparent;

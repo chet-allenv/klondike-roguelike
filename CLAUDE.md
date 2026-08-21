@@ -7,8 +7,9 @@ escalates each round until you run out of lives.
 Status: **the roguelike round loop is playable end to end** — a run
 starts with 3 lives at round 1, each round deals a fresh hand with a
 rising score target and capped redeals/undos, and winning/losing a hand
-transitions to the next round or ends the run. Power-up drafting isn't
-built yet — round wins go straight to the next round with no choice
+transitions to the next round or ends the run. The UX overhaul (step 5)
+is complete: animations and drag-and-drop are both in. Power-up drafting
+isn't built yet — round wins go straight to the next round with no choice
 offered (see step 6 below). This file is the source of truth for scope
 and design so a future session (or Claude Code) can pick it up and start
 building without re-deriving decisions.
@@ -36,14 +37,67 @@ building without re-deriving decisions.
   meant to be a real codebase the user keeps and extends.
 - Stack: Vite + TypeScript, vanilla DOM (no framework). The game state is
   small enough that React/etc. would be overhead, not help.
-- Interaction model: **click-to-select, click-to-move**, plus a **smart
-  click** shortcut layered on top — clicking a card sends it straight to
-  its destination when there's exactly one legal home (its foundation,
-  or a single valid tableau column); if the destination is ambiguous or
-  there isn't one, it falls back to select-then-click-destination so the
-  player keeps full control over genuinely ambiguous moves. Full
-  drag-and-drop is still a possible later addition as a pure UX layer on
-  top of the same move-validation logic, but isn't built.
+- Interaction model: **click-to-select, click-to-move**, plus
+  drag-and-drop (below). Both are always available; the player picks.
+- **Play assists are opt-in, and off by default** (`Assists` in
+  `render.ts`, passed via `MountOptions.assists`). Two things that used to
+  be baseline behavior are now gated behind this:
+  - `smartClick` — clicking a card sends it straight to its destination
+    when exactly one is legal (its foundation, or a single valid tableau
+    column), instead of just selecting it.
+  - `dropHints` — while dragging, every legal drop zone is outlined
+    (`.drop-legal`) and the one under the pointer highlights
+    (`.drop-active`).
+
+  Both were built as baseline, then turned off: showing the player where
+  a card can go does the scanning work that *is* the puzzle, and made
+  hands too easy to clear. The code stays fully wired rather than being
+  deleted because these are meant to become **power-ups** (see the pool
+  below) — earning "the game finds the move for you" as a drafted
+  ability is the interesting version of it. Nothing enables them today,
+  so a run plays without either; tests opt in explicitly via the
+  `SMART_CLICK` / `DROP_HINTS` constants in `render.test.ts`. Note that
+  with `smartClick` off, playing a card takes two clicks (select, then
+  destination) or one drag — the loss of pace is deliberate.
+- **Drag-and-drop** is built (`render.ts`), layered on top of click-to-move
+  rather than replacing it — both routes end in the same `attemptMoveTo`
+  and the same validators in `klondike.ts`, which didn't change. Mechanics:
+  Pointer Events (so mouse/touch/pen all work), a 5px threshold
+  (`DRAG_THRESHOLD_PX`) below which a press is still just a click, and
+  `setPointerCapture` (guarded — jsdom doesn't implement it) so releasing
+  outside the window can't leave a card stuck to the cursor. On crossing
+  the threshold the real card elements — the whole run, for a tableau
+  drag — are lifted out of the board into a fixed-position `.drag-layer`
+  that follows the pointer with a single `transform`; the layer lives
+  *inside* `content` so the FLIP snapshot in `draw()` sees the cards where
+  they were dropped, which is what makes them fly home on an illegal drop
+  and fly into place on a legal one, with no extra animation code.
+  Drop zones are declared in the markup as `data-drop="tableau:3"` /
+  `data-drop="foundation:hearts"`, and their rects are snapshotted once at
+  drag start and hit-tested manually rather than via
+  `document.elementFromPoint` (unimplemented in jsdom, and it would need
+  `pointer-events: none` juggling in the browser). Every legal zone gets
+  `.drop-legal`, the one under the cursor `.drop-active`. Escape or
+  `pointercancel` aborts. **The four foundations act as one target**: aim
+  at any of them and `resolveDropTarget` rewrites the target to the card's
+  own suit, matching what clicking a foundation already did. (This was
+  briefly the opposite — a drop named a *specific* pile, so a heart
+  dropped on clubs failed; that was reversed as too fiddly.) `canDropOn`
+  stays strict on purpose — it answers "can the card land *here*" — so
+  the rerouting lives entirely in `resolveDropTarget`, which also means
+  `.drop-active` marks the pile the card will actually land on rather
+  than the one the pointer is over, and only one foundation ever lights
+  up as legal. Tableau columns are addressed literally; only foundations
+  reroute. Note the drop is still hit-tested by **pointer position**, not
+  by where the dragged card overlaps — deliberate, but the likelier thing
+  to revisit if aiming feels off. Every drag ends in a
+  `draw()`, so the DOM resyncs from state either way; the synthetic click
+  the browser fires after a real drag is swallowed via `swallowNextClick`
+  so it can't run smart-click on top of the move just made.
+  **Not verified in a real browser** — the two bugs in the animation work
+  below were both found by hand-playtesting, and this code has only been
+  exercised under jsdom (with a stubbed `getBoundingClientRect`, since
+  jsdom does no layout). Treat feel/geometry as unconfirmed.
 - **Animations** are implemented via the **FLIP technique** (First-Last-
   Invert-Play), not DOM node reuse/diffing. `draw()` still does a full
   teardown/rebuild every render — that didn't change (it wipes a
@@ -72,9 +126,9 @@ building without re-deriving decisions.
   rotation, a physics-based victory cascade, and stock-redeal-specific
   animation (a redeal swaps which card is "on top" of the pile, so nothing
   currently visually announces it — acceptable gap, not attempted).
-  Drag-and-drop is still fully unbuilt — smart click / select-then-move
-  remains the only interaction model; this was intentionally sequenced
-  before drag-and-drop (see step 5 in Next Steps).
+  Animations were deliberately sequenced before drag-and-drop (see step 5
+  in Next Steps), and the FLIP layer is what drag-and-drop's snap-back /
+  snap-into-place reuses.
   - Two issues found via real-browser playtesting (not caught by jsdom
     tests, which don't do real layout). (1) The moving card had no
     elevated `z-index` during flight, so depending on move direction it
@@ -188,9 +242,19 @@ noted as consumable.
    future hands
 8. **Second Chance** — the first round loss in a run doesn't cost a
    life (one-time, consumed when triggered)
+9. **Auto-Play** — enables the `smartClick` assist for the rest of the
+   run: clicking a card with exactly one legal home sends it there in
+   one click. Already implemented behind `MountOptions.assists`, so this
+   one is just a matter of wiring the draft to flip the flag
+10. **Sharp Eye** — enables the `dropHints` assist for the rest of the
+    run: legal drop zones light up while you drag. Same deal — the
+    behavior exists, it just needs to be granted
 
 This list is a starting point, not final — expect to add/cut during
-implementation once playtesting shows what's fun vs. broken.
+implementation once playtesting shows what's fun vs. broken. 9 and 10
+are a different flavor from the rest: they hand back convenience that
+was deliberately taken away from the base game (see the assists note
+under "Decisions already made") rather than changing the rules.
 
 ## File structure
 
@@ -263,10 +327,12 @@ module they test. `game/` holds framework-free logic (no DOM access);
      technique (see the Animations note under "Decisions already made"
      for how it works and what's deliberately out of scope: true 3D
      flip, a physics-based cascade, redeal animation)
-   - Drag-and-drop — not started. Add mouse-drag interaction on top of
-     the existing move-validation logic (`canPlaceOnTableau`,
-     `canPlaceOnFoundation`, etc. in `klondike.ts` don't change), with
-     click-to-move/smart-click staying as the fallback for anyone who
-     doesn't drag
+   - ~~Drag-and-drop~~ done — pointer-event dragging on top of the
+     existing move-validation logic (`canPlaceOnTableau`,
+     `canPlaceOnFoundation`, etc. in `klondike.ts` didn't change), with
+     click-to-move/smart-click still working unchanged for anyone who
+     doesn't drag. See the Drag-and-drop note under "Decisions already
+     made" — including that it hasn't been playtested in a real browser
+     yet, only under jsdom
 6. Add `powerups.ts` and the draft screen between rounds
 7. Playtest and tune numbers
