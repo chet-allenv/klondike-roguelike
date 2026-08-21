@@ -4,15 +4,14 @@ A browser-based card game: classic Klondike solitaire reframed as a roguelike
 run. Play a hand, hit a score target, draft a power-up, repeat — difficulty
 escalates each round until you run out of lives.
 
-Status: **the roguelike round loop is playable end to end** — a run
-starts with 3 lives at round 1, each round deals a fresh hand with a
-rising score target and capped redeals/undos, and winning/losing a hand
-transitions to the next round or ends the run. The UX overhaul (step 5)
-is complete: animations and drag-and-drop are both in. Power-up drafting
-isn't built yet — round wins go straight to the next round with no choice
-offered (see step 6 below). This file is the source of truth for scope
-and design so a future session (or Claude Code) can pick it up and start
-building without re-deriving decisions.
+Status: **a Balatro-shaped roguelike Klondike, playable end to end.** A run
+starts with 3 lives and $4. Each round deals a Klondike hand with a score
+target; moves score **chips x mult**, and clearing the target pays out money.
+Between rounds a **shop** sells jokers, vouchers and card upgrades. Losing
+costs a life; 0 lives ends the run. What's left is step 7: playtesting and
+tuning, which is now a much bigger job than it was. This file is the source
+of truth for scope and design so a future session (or Claude Code) can pick
+it up and start building without re-deriving decisions.
 
 ## Git workflow
 
@@ -168,10 +167,11 @@ building without re-deriving decisions.
   supports *uncapped* freeplay by omitting `redealsAllowed`/
   `undosAllowed` from its options (defaults to unlimited, via an
   `Infinity` allotment internally) — the roguelike run (`ui/app.ts`) is
-  what actually passes the caps in. This is also what "Extra Undo" and
-  "Extra Redeal" (see Power-ups below) will raise once `powerups.ts`
-  exists — they add to `UNDOS_PER_ROUND`/`REDEALS_PER_ROUND` for the
-  rest of the run.
+  what actually passes the caps in — as `REDEALS_PER_ROUND +
+  effects.extraRedeals` / `UNDOS_PER_ROUND + effects.extraUndos`, which
+  is how the "Extra Undo" and "Extra Redeal" vouchers raise them for the
+  rest of the run. Whatever is left unspent is also paid for at round end
+  (see Money), so the budgets are a resource in two directions now.
 
 ## Core loop
 
@@ -186,32 +186,80 @@ building without re-deriving decisions.
      clear)
    - All 4 foundations are complete (perfect clear — always also a win,
      since a full clear scores far past any early-round target)
-   - The player has no legal moves left and has used all stock
-     redeals (stuck) — final score is still checked against the target
-     here, so a stuck hand with enough banked score still counts as a
-     win
-5. If the round is won: player picks 1 of 3 random power-ups (draft,
-   not yet built — see step 6), next round begins with a higher target.
+   - The player **calls the round on a spent stock**. Once the stock is
+     empty with no redeals left, clicking it ends the round instead of
+     doing nothing (twice — the stock is clicked constantly in play and a
+     stray click would cost a life; `endArmed` in `render.ts`). This is
+     the *only* loss path that fires in practice, and it exists because
+     without it **you cannot lose**: `isRoundStuck` needs `hasLegalMove`
+     to be false, but any face-up card that fits on any other column
+     keeps it true, so a player can shuffle the tableau forever.
+     Measured: drawing the stock completely dry while making no other
+     moves at all leaves only ~10% of boards genuinely stuck.
+   - Genuinely stuck (no legal move, no draw) — still checked, still
+     settled against the target, just rare
+5. If the round is won: the round pays out (see Money), and the shop
+   opens. Next round begins with a higher target.
 6. If the round is lost (stuck below target): player loses a life.
    0 lives ends the run.
-7. Run summary screen: rounds cleared, total score, power-ups collected
-   (not yet built).
+7. Run summary screen: rounds cleared, plus the jokers, vouchers and deck
+   upgrades collected, shown on the game-over screen alongside the "New
+   Run" button.
 
 No early "bank score and quit" option in v1 — keeps the state machine
 simple. Could be a later addition.
 
-## Scoring (starting values, tune by playtesting)
+## Scoring — chips x mult (`game/scoring.ts`)
 
-- Card played to foundation: **+10** (before multipliers)
-- Tableau card flipped face-up (reveal): **+5**
-- Waste → tableau move: **+5**
-- Foundation → tableau move (undoing progress): **-15** (discourages
-  using foundations as scratch space)
-- Consecutive foundation plays (combo): each play in a streak adds
-  +2 on top of base, streak resets on any non-foundation move
-- Stock redeal: no direct penalty; instead redeals are a **limited
-  resource per round** — implemented as `REDEALS_PER_ROUND = 2` in
-  `roguelike.ts`, which is the real cost
+Every move scores `round(chips x mult)` and adds it to the round total. This
+replaced a flat points-per-move system when the game was pivoted toward
+Balatro; the point of the change is that it gives jokers and card upgrades
+something to bite on. "+15 points" is not an interesting reward. "x1.5 mult
+when your combo reaches 3" is.
+
+Base chips per move (`CHIPS`):
+
+- Card played to foundation: **10**
+- Tableau card flipped face-up (reveal): **5**
+- Waste to tableau: **5**
+- Foundation back to tableau: **-15** (still a penalty, and multiplying it by
+  a grown mult makes it hurt more later — deliberate)
+- Tableau to tableau: **0**
+
+Mult starts at `BASE_MULT` (1) and gains `COMBO_MULT_STEP` (0.5) per combo
+step past the first, so a streak of 3 is x2. The Score Multiplier voucher
+multiplies whatever the rest of the pipeline produced.
+
+**Only `foundation-play` and `reveal` trigger card upgrades and jokers**
+(`TRIGGERING_EVENTS`). This is a real rule, not an oversight: a card can be
+shuffled between tableau columns forever, so letting an upgraded card pay out
+on every tableau move would turn a Bonus card into an infinite chip faucet. A
+reveal can only happen once per card per hand, so it's safe to include.
+
+Order of operations inside `scoreMove`, which matters once `multX` exists:
+base chips, then each upgrade in the order bought, then each firing joker,
+then the run-wide multiplier, then `round(chips x mult)`. Additive mult
+before multiplicative, exactly as in Balatro.
+
+## Money (`game/economy.ts`)
+
+Rounds pay out on a win; a lost round pays nothing beyond what the hand
+already banked mid-play. All four income sources are live:
+
+| Source | Rule |
+|---|---|
+| Base reward | `BASE_REWARD` (4), +$1 every `REWARD_GROWTH_EVERY` (3) rounds |
+| Unspent budgets | $1 per unused redeal and undo, capped at `LEFTOVER_CAP` (5) |
+| Score overshoot | $1 per `OVERSHOOT_STEP` (60) points past target, capped at `OVERSHOOT_CAP` (5) |
+| Interest | $1 per `INTEREST_PER` ($5) held, capped at `INTEREST_CAP` (5) |
+
+Plus money banked during the hand by Gold cards and money jokers, and
+end-of-round joker payouts (Rocket).
+
+Two details worth not rediscovering: interest is charged on what was held
+*going into* the payout, not on the payout itself (otherwise it compounds
+within a single round), and an uncapped freeplay budget reports 0 leftovers
+rather than Infinity, so unlimited undos can't be cashed in.
 
 ## Round difficulty escalation
 
@@ -227,42 +275,61 @@ simple. Could be a later addition.
   suit locked, or tableau starts with fewer face-down cards) for
   variety — not in v1 scope
 
-## Power-ups (draft pool, v1 target ~8)
+## The shop, and what it sells
 
-Each round win offers a choice of 3, drawn randomly from the pool below.
-Power-ups persist for the rest of the run (stack across rounds) unless
-noted as consumable.
+Clearing a round opens a shop (`game/shop.ts`, rendered by `ui/app.ts`)
+stocked with three categories. Rerolling costs `REROLL_BASE_COST` (2) and
+gets `REROLL_COST_STEP` (1) dearer within a visit. Nothing is stocked that
+the run can't use: jokers already held are filtered out, and non-repeatable
+vouchers likewise.
 
-1. **Extra Undo** — +1 undo available per round, on top of the base
-   `UNDOS_PER_ROUND = 3` (see the Undo note under "Decisions already
-   made")
-2. **Extra Redeal** — +1 stock redeal per round, on top of the base
-   `REDEALS_PER_ROUND = 2`
-3. **Peek Stock** — reveal the next 3 cards in the stock pile
-4. **Wild Card** (consumable) — one card usable as any rank/suit,
-   consumed on use
-5. **Score Multiplier** — permanent x1.1 to all scoring (stacks
-   multiplicatively across picks)
-6. **Combo Keeper** — combo streak no longer resets on a single
-   non-foundation move (one "grace" move per streak)
-7. **Thin Deck** — permanently remove one random rank's worth of
-   cards (4 cards) from the deck for the rest of the run, shortening
-   future hands
-8. **Second Chance** — the first round loss in a run doesn't cost a
-   life (one-time, consumed when triggered)
-9. **Auto-Play** — enables the `smartClick` assist for the rest of the
-   run: clicking a card with exactly one legal home sends it there in
-   one click. Already implemented behind `MountOptions.assists`, so this
-   one is just a matter of wiring the draft to flip the flag
-10. **Sharp Eye** — enables the `dropHints` assist for the rest of the
-    run: legal drop zones light up while you drag. Same deal — the
-    behavior exists, it just needs to be granted
+### Jokers (`game/jokers.ts`) — 13, cap of `JOKER_LIMIT` (5) held
 
-This list is a starting point, not final — expect to add/cut during
-implementation once playtesting shows what's fun vs. broken. 9 and 10
-are a different flavor from the rest: they hand back convenience that
-was deliberately taken away from the base game (see the assists note
-under "Decisions already made") rather than changing the rules.
+Passive modifiers that fire per scoring card. Their conditions are
+**declarative data**, not callbacks (`JokerCondition`: suit, color, ranks,
+parity, minCombo) — so jokers stay printable, listable and testable without
+executing them. Every clause present must hold. Two trigger phases exist:
+`onScore` (per scoring card) and `onRoundEnd` (money, e.g. Rocket).
+
+### Vouchers (`game/powerups.ts`) — 8
+
+The old draft pool, repurposed as purchasables. `effectsOf(picks)` folds them
+into one object that `ui/app.ts` reads **once per round** to set the hand up.
+Extra Undo / Extra Redeal / Score Multiplier are `repeatable` and stack;
+the rest are one-offs. Second Chance is consumed by `resolveRound`, which
+removes it from the list — which is also what puts it back on sale.
+Auto-Play and Sharp Eye grant the two play assists (see the assists note
+above): the game deliberately ships without them, and you buy them back.
+
+### Card upgrades (`game/upgrades.ts`) — 6
+
+Bonus (+30 chips), Mult (+4 mult), Gold ($3), Foil (+50 chips), Holographic
+(+10 mult), Polychrome (x1.5 mult). Bought first, *then* pointed at a target:
+buying sets `pendingUpgrade` and the shop swaps to a scope picker.
+
+**`UpgradeScope` is the load-bearing idea here.** An upgrade attaches to one
+of three things — a single card, a whole suit, or a whole rank — and all
+three are the same record on the run. That's why per-card and category-wide
+upgrades both exist without two systems.
+
+It also means **the run does not need to own a deck**. Card ids are stable
+(`hearts-7` is the same card in every deal), so a card-scoped upgrade is just
+a `cardId` string; `dealNewGame()` was never touched. `upgradesForCard`
+resolves them at scoring time.
+
+### Why the deck is never added to or removed from
+
+Klondike needs exactly 52 cards: 28 to the tableau, 24 to the stock, and
+`isWon` is "every foundation has 13". Remove a rank and the game cannot be
+won. So Balatro's deck-editing lever is out of scope permanently — upgrades
+decorate cards, and never change the census. (This is also why the earlier
+"Thin Deck" idea was cut.)
+
+### Still unbuilt from the original power-up list
+
+- **Wild Card** — every validator in `klondike.ts` takes a concrete
+  rank/suit, and a wild card needs an interaction of its own (choose what it
+  becomes, and when). A feature, not a modifier.
 
 ## File structure
 
@@ -278,13 +345,22 @@ klondike-roguelike/
       klondike.test.ts
       scoring.ts          # scoring + combo logic
       scoring.test.ts
-      roguelike.ts         # run state: lives, round/target, redeal + undo budgets
+      roguelike.ts         # run state: lives, round/target, money, jokers, upgrades
       roguelike.test.ts
-      powerups.ts           # power-up definitions + effects (not yet built)
+      economy.ts            # round payouts: base, leftovers, overshoot, interest
+      economy.test.ts
+      jokers.ts             # joker catalogue + declarative trigger conditions
+      jokers.test.ts
+      upgrades.ts           # card upgrade catalogue + card/suit/rank scopes
+      upgrades.test.ts
+      shop.ts               # shop stock rolling, reroll pricing, item accessors
+      shop.test.ts
+      powerups.ts           # voucher catalogue + stacked effects
+      powerups.test.ts
     ui/                 # DOM rendering, click handlers, styling
       app.ts              # owns the top-level state machine: sequences
-                            # rounds via mountGame, shows round-result /
-                            # game-over screens between them
+                            # rounds via mountGame, then payout / shop /
+                            # scope-picker / game-over screens between them
       app.test.ts
       render.ts            # renders + drives ONE hand (freeplay or a
                             # round, via MountOptions); also owns the
@@ -302,16 +378,17 @@ Tests are colocated with the file they cover (`foo.ts` + `foo.test.ts`)
 rather than mirrored into a separate tree — keep new tests next to the
 module they test. `game/` holds framework-free logic (no DOM access);
 `ui/` holds everything that touches `document`. New logic modules
-(`powerups.ts`) belong in `game/`.
+belong in `game/`.
 
 ## Open questions for next session
 
 - Exact escalation curve for score targets and redeal counts (needs
   playtesting, can't be decided on paper)
-- Whether power-ups should have rarity tiers (common/rare) once the
-  pool grows past ~8
-- Whether to add a "shop" (spend accumulated score on power-ups)
-  instead of a free draft — free draft is simpler for v1
+- Whether jokers should have rarity tiers, now that there are 13
+- Whether a joker should be sellable back for money, as in Balatro —
+  currently a bought joker is stuck in its slot for the run, which makes
+  hitting `JOKER_LIMIT` feel worse than it should
+- Whether the shop should ever open after a *lost* round
 - Visual style: plain CSS card faces vs. an existing card SVG set
 
 ## Next steps when building resumes
@@ -342,5 +419,21 @@ module they test. `game/` holds framework-free logic (no DOM access);
      doesn't drag. See the Drag-and-drop note under "Decisions already
      made" — including that it hasn't been playtested in a real browser
      yet, only under jsdom
-6. Add `powerups.ts` and the draft screen between rounds
-7. Playtest and tune numbers
+6. ~~Add `powerups.ts` and the draft screen between rounds~~ done, then
+   **superseded**: the free draft was replaced by money + a shop when the
+   game was pivoted toward Balatro. The 8 power-ups survive as vouchers
+7. ~~Balatro pivot~~ done in one pass — chips x mult scoring, money with
+   all four income sources, a shop selling jokers / vouchers / card
+   upgrades, and card upgrades scoped to a card, suit or rank
+8. **Playtest and tune numbers** — the only step left, and now the big
+   one. Every number is a guess, not a measurement, and the chips x mult
+   rewrite means the *old* guesses are stale too:
+   - `BASE_TARGET` / `TARGET_GROWTH` were tuned against flat scoring.
+     Mult grows multiplicatively as jokers stack, so the target curve
+     almost certainly needs to grow faster than +25%/round now
+   - `CHIPS` values, `BASE_MULT`, `COMBO_MULT_STEP`
+   - every price in `jokers.ts`, `upgrades.ts`, `powerups.ts`, and
+     `REROLL_BASE_COST` / `REROLL_COST_STEP`
+   - every constant in `economy.ts`, especially whether $4 to start and
+     a cap of $5 interest make banking worth doing
+   - `JOKER_LIMIT`, and the shop's slot counts

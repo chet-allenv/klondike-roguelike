@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Card, Suit } from "./cards";
+import { STARTING_MONEY } from "./economy";
 import type { GameState } from "./klondike";
 import {
   BASE_TARGET,
@@ -7,6 +8,7 @@ import {
   canUndo,
   createRoundState,
   createRun,
+  grantPowerUp,
   isRoundStuck,
   REDEALS_PER_ROUND,
   registerStockDraw,
@@ -37,6 +39,10 @@ describe("createRun", () => {
       round: 1,
       roundsCleared: 0,
       gameOver: false,
+      money: STARTING_MONEY,
+      jokers: [],
+      powerUps: [],
+      deckUpgrades: [],
     });
   });
 });
@@ -196,5 +202,61 @@ describe("isRoundStuck", () => {
       [card("spades", 3)],
     ];
     expect(isRoundStuck(state, createRoundState(0))).toBe(true);
+  });
+});
+
+describe("power-ups on a run", () => {
+  it("starts with none and appends picks in order, duplicates included", () => {
+    let run = createRun();
+    expect(run.powerUps).toEqual([]);
+
+    run = grantPowerUp(run, "extra-undo");
+    run = grantPowerUp(run, "sharp-eye");
+    run = grantPowerUp(run, "extra-undo");
+    expect(run.powerUps).toEqual(["extra-undo", "sharp-eye", "extra-undo"]);
+  });
+
+  it("carries picks through a won round", () => {
+    const run = grantPowerUp(createRun(), "combo-keeper");
+    const { run: next } = resolveRound(run, 120, 100);
+    expect(next.powerUps).toEqual(["combo-keeper"]);
+  });
+});
+
+describe("Second Chance", () => {
+  it("absorbs a loss instead of a life, and is consumed doing it", () => {
+    const run = grantPowerUp(createRun(), "second-chance");
+    const outcome = resolveRound(run, 50, 100);
+
+    expect(outcome.result).toBe("lost");
+    expect(outcome.secondChanceUsed).toBe(true);
+    expect(outcome.run.lives).toBe(STARTING_LIVES);
+    expect(outcome.run.powerUps).toEqual([]);
+    expect(outcome.run.gameOver).toBe(false);
+  });
+
+  it("costs a life on the next loss, having been spent", () => {
+    const run = grantPowerUp(createRun(), "second-chance");
+    const saved = resolveRound(run, 50, 100).run;
+    const outcome = resolveRound(saved, 50, 100);
+
+    expect(outcome.secondChanceUsed).toBe(false);
+    expect(outcome.run.lives).toBe(STARTING_LIVES - 1);
+  });
+
+  it("is left untouched by a won round", () => {
+    const run = grantPowerUp(createRun(), "second-chance");
+    const outcome = resolveRound(run, 120, 100);
+
+    expect(outcome.secondChanceUsed).toBe(false);
+    expect(outcome.run.powerUps).toEqual(["second-chance"]);
+  });
+
+  it("keeps only the one it spends when two are somehow held", () => {
+    let run = grantPowerUp(createRun(), "second-chance");
+    run = grantPowerUp(run, "extra-undo");
+    const outcome = resolveRound(run, 50, 100);
+
+    expect(outcome.run.powerUps).toEqual(["extra-undo"]);
   });
 });

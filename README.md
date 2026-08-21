@@ -56,12 +56,25 @@ round — see CLAUDE.md's "Next steps" for the build order.
 - Click a card to select it, then click where it goes
 - Named board areas: Deck, Waste, Foundations and Tableau each sit in a
   labelled box, so it's clear what each region is
-- Scoring HUD (foundation plays, reveals, waste moves, combo streak,
-  foundation-to-tableau penalty) per CLAUDE.md's scoring rules
+- **Chips x mult scoring**: every move contributes chips, and mult grows
+  with your combo streak, your jokers and your upgraded cards
 - Undo button, capped at 3 per round (unlimited in freeplay)
 - **Roguelike run**: lives, round number, rising score target, capped
   stock redeals (2/round) and undos (3/round), round-result screen
-  between hands, game-over/"New Run" screen at 0 lives
+  between hands, game-over/"New Run" screen at 0 lives. Once the stock is
+  spent and no redeals remain, clicking it calls the round
+- **Money**: cleared rounds pay out — a base reward, $1 per unspent
+  redeal and undo, a bonus for overshooting the target, and interest on
+  what you've banked. Gold cards and money jokers pay during the hand
+- **A shop between rounds**, selling three things that stack for the rest
+  of the run:
+  - **Jokers** (13) — passive modifiers that fire per scoring card, e.g.
+    +4 mult on hearts, or x1.5 mult once your combo hits 3. Five slots
+  - **Vouchers** (8) — extra undos/redeals, a score multiplier, peeking
+    at the stock, combo protection, a spare life, and the two play assists
+  - **Card upgrades** (6) — Bonus, Mult, Gold, Foil, Holographic and
+    Polychrome, applied to a single card, a whole suit, or a whole rank.
+    The deck always stays 52 cards; upgrades only decorate them
 - Animations: cards slide when moved (any pile to any pile), a subtle
   glow pulse when a face-down card is revealed, and a win celebration
   (banner pop + foundation glow) on victory. Respects
@@ -70,8 +83,7 @@ round — see CLAUDE.md's "Next steps" for the build order.
   a column or foundation. An illegal drop flies the card home; Escape
   cancels. Works with touch and pen as well as mouse
 - Play assists (auto-move on click, and highlighting legal drop targets)
-  are built but **off** — finding a card's destination yourself is the
-  puzzle. They're staged to become draftable power-ups; see the assists
-  note in [CLAUDE.md](./CLAUDE.md)
+  start **off** — finding a card's destination yourself is the puzzle.
+  Each is earned by drafting the matching power-up (Auto-Play, Sharp Eye)
 - Test suite (Vitest) covering deck/card logic, move validation, round
   logic, scoring math, and board interaction

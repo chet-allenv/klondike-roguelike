@@ -22,7 +22,16 @@ import {
   registerStockDraw,
   registerUndo,
 } from "../game/roguelike";
-import { applyScoreEvent, createScoreState, type ScoreState } from "../game/scoring";
+import type { Joker } from "../game/jokers";
+import { type DeckUpgrade, upgradesForCard } from "../game/upgrades";
+import {
+  applyScoreEvent,
+  BASE_MULT,
+  COMBO_MULT_STEP,
+  createScoreState,
+  type ScoreContext,
+  type ScoreState,
+} from "../game/scoring";
 
 type Selection =
   | { kind: "tableau"; col: number; cardIndex: number }
@@ -83,6 +92,11 @@ function areaBox(name: string, label: string): HTMLElement {
   caption.textContent = label;
   area.appendChild(caption);
   return area;
+}
+
+/** Trims the trailing ".0" off whole multipliers so the HUD reads "x2", not "x2.0". */
+function formatMult(mult: number): string {
+  return Number.isInteger(mult) ? String(mult) : mult.toFixed(1);
 }
 
 function sameDropTarget(a: DropTarget, b: DropTarget): boolean {
@@ -164,6 +178,11 @@ interface Snapshot {
 export interface HandEndResult {
   won: boolean;
   score: number;
+  /** Money the hand itself banked, from Gold cards and money jokers. */
+  money: number;
+  /** Left in the round's budgets — the payout pays for thrift. */
+  redealsLeft: number;
+  undosLeft: number;
 }
 
 /**
@@ -196,8 +215,24 @@ export interface MountOptions {
   undosAllowed?: number;
   /** Round's score target. When set, the HUD shows "Score: X / target". */
   target?: number;
-  /** Extra HUD context, e.g. current round number and lives remaining. */
-  roundInfo?: { round: number; lives: number };
+  /** Score Multiplier power-up. Defaults to 1 (no change). */
+  scoreMultiplier?: number;
+  /** Combo Keeper power-up: one non-foundation move per streak spares the combo. */
+  comboKeeper?: boolean;
+  /** Peek Stock power-up: how many upcoming stock cards to show. 0 for none. */
+  peekStock?: number;
+  /** Jokers held, which fire on every card that scores. */
+  jokers?: readonly Joker[];
+  /** Card upgrades bought this run, resolved per scoring card. */
+  deckUpgrades?: readonly DeckUpgrade[];
+  /** Extra HUD context, e.g. current round number, lives, money and jokers. */
+  roundInfo?: {
+    round: number;
+    lives: number;
+    money?: number;
+    powerUps?: string[];
+    jokers?: string[];
+  };
   /**
    * Fires once, the moment the hand is won (all foundations complete) or
    * becomes stuck (no legal move and no way to draw). In this mode the
@@ -214,10 +249,29 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     redealsAllowed,
     undosAllowed,
     target,
+    scoreMultiplier = 1,
+    comboKeeper = false,
+    peekStock = 0,
+    jokers = [],
+    deckUpgrades = [],
     roundInfo,
     onHandEnd,
   } = options;
   const { smartClick = false, dropHints = false } = assists;
+
+  /**
+   * Everything a single move needs to be scored: the card that scored, the
+   * upgrades attached to it, and the run-wide jokers and multipliers.
+   */
+  function scoreContext(card?: Card): ScoreContext {
+    return {
+      card,
+      upgrades: card ? upgradesForCard(card, deckUpgrades) : [],
+      jokers,
+      multiplier: scoreMultiplier,
+      comboKeeper,
+    };
+  }
 
   let state = initialState;
   let score = createScoreState();
@@ -236,6 +290,9 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
   let nextFaceUp = new Map<string, boolean>();
   let previousWon = false;
   let drag: DragState | null = null;
+  // True once the player has clicked a spent stock once; the next click on
+  // it ends the round. Any other action stands the round back down.
+  let endArmed = false;
   // A completed drag is followed by the browser's synthetic click; without
   // this the click would run smart-click on top of the move just made.
   let swallowNextClick = false;
@@ -265,12 +322,37 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     if (isWon(state) || (target !== undefined && score.total >= target)) {
       // A perfect clear always wins; reaching the target also wins the
       // round immediately, without having to finish out the hand.
-      ended = true;
-      onHandEnd({ won: true, score: score.total });
+      finishHand();
     } else if (isRoundStuck(state, roundState)) {
-      ended = true;
-      onHandEnd({ won: false, score: score.total });
+      finishHand();
     }
+  }
+
+  /**
+   * Ends the hand, settling it against the target. Because reaching the
+   * target ends the round the instant it happens, anything that gets here
+   * by choice (see handleStockClick) is necessarily a loss.
+   */
+  function finishHand() {
+    if (ended || !onHandEnd) return;
+    ended = true;
+    const won = isWon(state) || (target !== undefined && score.total >= target);
+    onHandEnd(handResult(won));
+  }
+
+  function handResult(won: boolean): HandEndResult {
+    // An uncapped (freeplay) budget has no "unused" remainder worth paying
+    // for — reporting Infinity would poison the payout arithmetic.
+    const left = (allowed: number, used: number) =>
+      Number.isFinite(allowed) ? Math.max(0, allowed - used) : 0;
+
+    return {
+      won,
+      score: score.total,
+      money: score.money,
+      redealsLeft: left(roundState.redealsAllowed, roundState.redealsUsed),
+      undosLeft: left(roundState.undosAllowed, roundState.undosUsed),
+    };
   }
 
   function select(next: NonNullable<Selection>) {
@@ -290,34 +372,42 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
 
   function doMoveWasteToFoundation(): boolean {
     const prev = snapshot();
+    const card = state.waste[state.waste.length - 1];
     if (!moveWasteToFoundation(state)) return false;
-    score = applyScoreEvent(score, "foundation-play");
+    score = applyScoreEvent(score, "foundation-play", scoreContext(card));
     commit(prev);
     return true;
   }
 
   function doMoveWasteToTableau(col: number): boolean {
     const prev = snapshot();
+    const card = state.waste[state.waste.length - 1];
     if (!moveWasteToTableau(state, col)) return false;
-    score = applyScoreEvent(score, "waste-to-tableau");
+    score = applyScoreEvent(score, "waste-to-tableau", scoreContext(card));
     commit(prev);
     return true;
   }
 
   function doMoveFoundationToTableau(suit: (typeof SUITS)[number], col: number): boolean {
     const prev = snapshot();
+    const pile = state.foundations[suit];
+    const card = pile[pile.length - 1];
     if (!moveFoundationToTableau(state, suit, col)) return false;
-    score = applyScoreEvent(score, "foundation-to-tableau");
+    score = applyScoreEvent(score, "foundation-to-tableau", scoreContext(card));
     commit(prev);
     return true;
   }
 
   function doMoveTableauToTableau(fromCol: number, cardIndex: number, toCol: number): boolean {
     const prev = snapshot();
-    const revealed = willReveal(state.tableau[fromCol], cardIndex);
+    const source = state.tableau[fromCol];
+    const card = source[cardIndex];
+    // The card that gets turned over scores in its own right, so it needs its
+    // own context — its upgrades, not the moved card's.
+    const revealedCard = willReveal(source, cardIndex) ? source[cardIndex - 1] : undefined;
     if (!moveTableauToTableau(state, fromCol, cardIndex, toCol)) return false;
-    if (revealed) score = applyScoreEvent(score, "reveal");
-    score = applyScoreEvent(score, "tableau-to-tableau");
+    if (revealedCard) score = applyScoreEvent(score, "reveal", scoreContext(revealedCard));
+    score = applyScoreEvent(score, "tableau-to-tableau", scoreContext(card));
     commit(prev);
     return true;
   }
@@ -325,10 +415,13 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
   function doMoveTableauToFoundation(col: number): boolean {
     const prev = snapshot();
     const column = state.tableau[col];
-    const revealed = willReveal(column, column.length - 1);
+    const card = column[column.length - 1];
+    const revealedCard = willReveal(column, column.length - 1)
+      ? column[column.length - 2]
+      : undefined;
     if (!moveTableauToFoundation(state, col)) return false;
-    if (revealed) score = applyScoreEvent(score, "reveal");
-    score = applyScoreEvent(score, "foundation-play");
+    if (revealedCard) score = applyScoreEvent(score, "reveal", scoreContext(revealedCard));
+    score = applyScoreEvent(score, "foundation-play", scoreContext(card));
     commit(prev);
     return true;
   }
@@ -605,7 +698,21 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
 
   function handleStockClick() {
     if (isDragClick()) return;
-    if (!canDrawFromStock(state, roundState)) return;
+
+    if (!canDrawFromStock(state, roundState)) {
+      // The stock is empty and there's no redeal left. Rather than a dead
+      // click, this is how a round ends: without it a player can shuffle the
+      // tableau forever and never lose. Two clicks, because the stock is
+      // clicked constantly during play and a stray one would cost a life.
+      if (!endArmed) {
+        endArmed = true;
+        draw();
+        return;
+      }
+      finishHand();
+      return;
+    }
+    endArmed = false;
 
     const prev = snapshot();
     registerStockDraw(state, roundState); // must run before drawFromStock mutates
@@ -617,6 +724,7 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
 
   function handleWasteClick() {
     if (isDragClick()) return;
+    endArmed = false;
     const card = state.waste[state.waste.length - 1];
     if (!card) return;
 
@@ -628,6 +736,7 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
 
   function handleTableauClick(col: number, cardIndex: number | null) {
     if (isDragClick()) return;
+    endArmed = false;
     const column = state.tableau[col];
 
     if (selection && !(selection.kind === "tableau" && selection.col === col)) {
@@ -649,6 +758,7 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
 
   function handleFoundationClick(suit: (typeof SUITS)[number]) {
     if (isDragClick()) return;
+    endArmed = false;
     if (selection && !(selection.kind === "foundation" && selection.suit === suit)) {
       attemptMoveTo({ kind: "foundation", suit });
       return;
@@ -657,6 +767,7 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
   }
 
   function handleUndo() {
+    endArmed = false;
     if (!canUndo(roundState)) return;
     const prev = history.pop();
     if (!prev) return;
@@ -707,8 +818,15 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     const hud = document.createElement("div");
     hud.className = "hud";
     hud.innerHTML = `<span class="score">Score: ${score.total}${target !== undefined ? ` / ${target}` : ""}</span>`;
+    // The mult a move would land at right now, before the card's own
+    // upgrades and any joker bonuses — i.e. what the combo has built up.
+    const standingMult = (BASE_MULT + Math.max(0, score.comboStreak - 1) * COMBO_MULT_STEP) * scoreMultiplier;
+    hud.innerHTML += `<span class="mult">Mult x${formatMult(standingMult)}</span>`;
     if (score.comboStreak > 1) {
       hud.innerHTML += `<span class="combo">Combo x${score.comboStreak}</span>`;
+    }
+    if (roundInfo?.money !== undefined) {
+      hud.innerHTML += `<span class="money">$${roundInfo.money + score.money}</span>`;
     }
     if (roundInfo) {
       hud.innerHTML += `<span class="round-info">Round ${roundInfo.round} · ♥${roundInfo.lives}</span>`;
@@ -720,6 +838,24 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     if (undosAllowed !== undefined) {
       const undosLeft = roundState.undosAllowed - roundState.undosUsed;
       hud.innerHTML += `<span class="undos-left">Undos left: ${undosLeft}</span>`;
+    }
+    if (peekStock > 0) {
+      // The stock is drawn from the end of the array, so the next cards up
+      // are its last few, most imminent first.
+      const upcoming = state.stock.slice(-peekStock).reverse();
+      const faces = upcoming
+        .map(
+          (card) =>
+            `<span class="peek-card${isRed(card.suit) ? " red" : ""}">${rankLabel(card.rank)}${SUIT_SYMBOL[card.suit]}</span>`,
+        )
+        .join("");
+      hud.innerHTML += `<span class="peek">Next: ${faces || "—"}</span>`;
+    }
+    if (roundInfo?.jokers?.length) {
+      hud.innerHTML += `<span class="jokers">🃏 ${roundInfo.jokers.join(" · ")}</span>`;
+    }
+    if (roundInfo?.powerUps?.length) {
+      hud.innerHTML += `<span class="power-ups">⚡ ${roundInfo.powerUps.join(" · ")}</span>`;
     }
     content.appendChild(hud);
 
@@ -735,9 +871,14 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
     stockPile.className = "pile stock";
     if (state.stock.length > 0) {
       stockPile.appendChild(renderCard(state.stock[state.stock.length - 1], false, false));
-    } else {
+    } else if (canDrawFromStock(state, roundState)) {
       stockPile.classList.add("empty");
       stockPile.textContent = "↻";
+    } else {
+      // Spent: no cards and no redeal. Clicking here calls the round.
+      stockPile.classList.add("empty", "spent");
+      stockPile.textContent = onHandEnd ? (endArmed ? "End round?" : "Spent") : "Spent";
+      if (endArmed) stockPile.classList.add("armed");
     }
     stockPile.addEventListener("click", handleStockClick);
     deckArea.appendChild(stockPile);
@@ -868,7 +1009,12 @@ export function mountGame(root: HTMLElement, options: MountOptions = {}): void {
       controls.appendChild(newGameBtn);
     }
 
-    content.appendChild(controls);
+    // Lives in the HUD rather than under the board: the board's height moves
+    // with the tallest tableau column, so anything below it slides around as
+    // the hand is played. Appended (not written via innerHTML) and only once
+    // the HUD's own innerHTML edits are finished, or the listeners above
+    // would be thrown away with the rebuilt children.
+    hud.appendChild(controls);
 
     previousFaceUp = nextFaceUp;
     previousWon = isWon(state);

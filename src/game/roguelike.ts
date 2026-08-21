@@ -1,4 +1,8 @@
 import { type GameState, hasLegalMove } from "./klondike";
+import { STARTING_MONEY } from "./economy";
+import type { JokerId } from "./jokers";
+import type { PowerUpId } from "./powerups";
+import type { DeckUpgrade } from "./upgrades";
 
 export const STARTING_LIVES = 3;
 export const BASE_TARGET = 200;
@@ -11,10 +15,45 @@ export interface RunState {
   round: number; // 1-indexed
   roundsCleared: number;
   gameOver: boolean;
+  /** Money on hand, spent in the shop between rounds. */
+  money: number;
+  /** Jokers held, in the order bought. */
+  jokers: JokerId[];
+  /** Vouchers bought, in order. Duplicates are meaningful — they stack. */
+  powerUps: PowerUpId[];
+  /** Card upgrades bought, each bound to a card, suit or rank. */
+  deckUpgrades: DeckUpgrade[];
 }
 
 export function createRun(): RunState {
-  return { lives: STARTING_LIVES, round: 1, roundsCleared: 0, gameOver: false };
+  return {
+    lives: STARTING_LIVES,
+    round: 1,
+    roundsCleared: 0,
+    gameOver: false,
+    money: STARTING_MONEY,
+    jokers: [],
+    powerUps: [],
+    deckUpgrades: [],
+  };
+}
+
+/** Adds a bought voucher to the run. */
+export function grantPowerUp(run: RunState, id: PowerUpId): RunState {
+  return { ...run, powerUps: [...run.powerUps, id] };
+}
+
+export function grantJoker(run: RunState, id: JokerId): RunState {
+  return { ...run, jokers: [...run.jokers, id] };
+}
+
+export function grantDeckUpgrade(run: RunState, upgrade: DeckUpgrade): RunState {
+  return { ...run, deckUpgrades: [...run.deckUpgrades, upgrade] };
+}
+
+/** Books money in or out. Spending is the caller's to validate. */
+export function adjustMoney(run: RunState, amount: number): RunState {
+  return { ...run, money: run.money + amount };
 }
 
 /** Score target for a given round (1-indexed), rounded to a whole number. */
@@ -24,18 +63,37 @@ export function targetForRound(round: number): number {
 
 export type RoundResult = "won" | "lost";
 
+export interface RoundOutcome {
+  run: RunState;
+  result: RoundResult;
+  /** True when a held Second Chance absorbed this loss instead of a life. */
+  secondChanceUsed: boolean;
+}
+
 /** Applies a completed hand's final score against its target and advances run state. */
-export function resolveRound(run: RunState, finalScore: number, target: number): { run: RunState; result: RoundResult } {
+export function resolveRound(run: RunState, finalScore: number, target: number): RoundOutcome {
   if (finalScore >= target) {
     return {
       result: "won",
+      secondChanceUsed: false,
       run: { ...run, round: run.round + 1, roundsCleared: run.roundsCleared + 1 },
+    };
+  }
+
+  if (run.powerUps.includes("second-chance")) {
+    // Spent, not merely disabled: dropping it from the list is what lets it
+    // come back around in a later draft.
+    return {
+      result: "lost",
+      secondChanceUsed: true,
+      run: { ...run, powerUps: run.powerUps.filter((id) => id !== "second-chance") },
     };
   }
 
   const lives = run.lives - 1;
   return {
     result: "lost",
+    secondChanceUsed: false,
     run: { ...run, lives, gameOver: lives <= 0 },
   };
 }

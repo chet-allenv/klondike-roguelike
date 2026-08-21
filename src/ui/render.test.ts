@@ -76,6 +76,11 @@ describe("mountGame — initial render", () => {
     expect(scoreText()).toBe("Score: 0");
     expect(root.querySelector<HTMLButtonElement>(".undo")?.disabled).toBe(true);
   });
+
+  it("keeps the controls in the HUD, above the board whose height moves", () => {
+    expect(root.querySelector(".hud .controls .undo")).not.toBeNull();
+    expect(root.querySelector(".board .controls")).toBeNull();
+  });
 });
 
 describe("stock interaction", () => {
@@ -378,7 +383,7 @@ describe("roguelike mode", () => {
     click(".pile.waste"); // smart-moves the King to complete the last foundation
 
     expect(root.querySelector(".win-banner")).not.toBeNull();
-    expect(results).toEqual([{ won: true, score: 10 }]);
+    expect(results).toMatchObject([{ won: true, score: 10 }]);
   });
 
   it("wins the round immediately on reaching the target, without finishing the hand", () => {
@@ -392,7 +397,7 @@ describe("roguelike mode", () => {
     click(".pile.waste"); // Ace -> foundation, score hits 10 (the target) but the hand isn't won
 
     expect(root.querySelector(".win-banner")).toBeNull();
-    expect(results).toEqual([{ won: true, score: 10 }]);
+    expect(results).toMatchObject([{ won: true, score: 10 }]);
   });
 
   it("calls onHandEnd once with won:false when the round is stuck from the start", () => {
@@ -411,7 +416,7 @@ describe("roguelike mode", () => {
     const results: HandEndResult[] = [];
     mount(state, { redealsAllowed: 0, onHandEnd: (r) => results.push(r) });
 
-    expect(results).toEqual([{ won: false, score: 0 }]);
+    expect(results).toMatchObject([{ won: false, score: 0 }]);
   });
 });
 
@@ -740,5 +745,176 @@ describe("drag and drop", () => {
     expect(
       root.querySelector('[data-drop="foundation:hearts"] [data-card-id="hearts-1"]'),
     ).not.toBeNull();
+  });
+});
+
+describe("power-up options on a hand", () => {
+  it("scales scoring by the multiplier", () => {
+    const state = emptyState();
+    state.waste = [card("hearts", 1)];
+    mount(state, { ...SMART_CLICK, scoreMultiplier: 2 });
+
+    click(".pile.waste"); // Ace -> foundation, normally +10
+
+    expect(scoreText()).toBe("Score: 20");
+  });
+
+  it("leaves scoring alone when no multiplier is given", () => {
+    const state = emptyState();
+    state.waste = [card("hearts", 1)];
+    mount(state, SMART_CLICK);
+
+    click(".pile.waste");
+
+    expect(scoreText()).toBe("Score: 10");
+  });
+
+  /** Ace to the foundation, a tableau shuffle, then the 2 — a streak with a gap in it. */
+  function comboRunState(): GameState {
+    const state = emptyState();
+    state.waste = [card("hearts", 1)];
+    state.tableau[0] = [card("spades", 8)];
+    state.tableau[1] = [card("hearts", 7)]; // its only legal home is the 8 in column 0
+    state.tableau[2] = [card("hearts", 2)];
+    return state;
+  }
+
+  function playComboRun() {
+    click(".pile.waste"); // Ace -> foundation, streak 1
+    click('[data-card-id="hearts-7"]'); // tableau -> tableau, normally breaks the streak
+    click('[data-card-id="hearts-2"]'); // 2 -> foundation
+  }
+
+  it("carries the combo through one non-foundation move with combo keeper on", () => {
+    mount(comboRunState(), { ...SMART_CLICK, comboKeeper: true });
+
+    playComboRun();
+
+    expect(root.querySelector(".hud .combo")?.textContent).toBe("Combo x2");
+    expect(scoreText()).toBe("Score: 25"); // 10 chips x1, then 10 chips x1.5
+  });
+
+  it("breaks the combo on that same move without it", () => {
+    mount(comboRunState(), SMART_CLICK);
+
+    playComboRun();
+
+    expect(root.querySelector(".hud .combo")).toBeNull(); // back to a streak of 1
+    expect(scoreText()).toBe("Score: 20"); // 10 chips x1, twice
+  });
+
+  it("shows the next stock cards when peek is on, most imminent first", () => {
+    const state = emptyState();
+    // drawFromStock pops from the end, so clubs-3 comes up next.
+    state.stock = [card("spades", 9, false), card("hearts", 5, false), card("clubs", 3, false)];
+    mount(state, { peekStock: 2 });
+
+    const peeked = Array.from(root.querySelectorAll(".hud .peek-card")).map((el) => el.textContent);
+    expect(peeked).toEqual(["3♣", "5♥"]);
+  });
+
+  it("marks red peeked cards so they read at a glance", () => {
+    const state = emptyState();
+    state.stock = [card("hearts", 5, false)];
+    mount(state, { peekStock: 1 });
+
+    expect(root.querySelector(".hud .peek-card")?.classList.contains("red")).toBe(true);
+  });
+
+  it("shows no peek readout when the power-up isn't held", () => {
+    const state = emptyState();
+    state.stock = [card("hearts", 5, false)];
+    mount(state);
+
+    expect(root.querySelector(".hud .peek")).toBeNull();
+  });
+
+  it("lists held power-ups in the HUD", () => {
+    mount(undefined, { roundInfo: { round: 2, lives: 3, powerUps: ["Sharp Eye", "Extra Undo"] } });
+
+    const held = root.querySelector(".hud .power-ups")?.textContent ?? "";
+    expect(held).toContain("Sharp Eye");
+    expect(held).toContain("Extra Undo");
+  });
+});
+
+describe("calling a round on a spent stock", () => {
+  /** Stock empty, no redeals, and a legal tableau move still available. */
+  function spentStockState(): GameState {
+    const state = emptyState();
+    state.tableau[0] = [card("spades", 8)];
+    state.tableau[1] = [card("hearts", 7)]; // can still be shuffled onto the 8, forever
+    return state;
+  }
+
+  it("marks the stock spent once there are no cards and no redeals", () => {
+    mount(spentStockState(), { redealsAllowed: 0, target: 500, onHandEnd: () => {} });
+
+    const stock = root.querySelector(".pile.stock");
+    expect(stock?.classList.contains("spent")).toBe(true);
+    expect(stock?.textContent).toBe("Spent");
+  });
+
+  it("arms on the first click rather than ending the round outright", () => {
+    const results: HandEndResult[] = [];
+    mount(spentStockState(), { redealsAllowed: 0, target: 500, onHandEnd: (r) => results.push(r) });
+
+    click(".pile.stock");
+
+    expect(results).toEqual([]);
+    expect(root.querySelector(".pile.stock")?.classList.contains("armed")).toBe(true);
+    expect(root.querySelector(".pile.stock")?.textContent).toBe("End round?");
+  });
+
+  it("ends the round as a loss on the second click", () => {
+    const results: HandEndResult[] = [];
+    mount(spentStockState(), { redealsAllowed: 0, target: 500, onHandEnd: (r) => results.push(r) });
+
+    click(".pile.stock");
+    click(".pile.stock");
+
+    expect(results).toMatchObject([{ won: false, score: 0 }]);
+  });
+
+  it("stands back down when the player does something else instead", () => {
+    const results: HandEndResult[] = [];
+    mount(spentStockState(), { redealsAllowed: 0, target: 500, onHandEnd: (r) => results.push(r) });
+
+    click(".pile.stock"); // armed
+    click('[data-card-id="hearts-7"]'); // changed their mind
+    expect(root.querySelector(".pile.stock")?.classList.contains("armed")).toBe(false);
+
+    click(".pile.stock"); // arms again rather than ending
+    expect(results).toEqual([]);
+  });
+
+  it("ends only once, however many times it's clicked", () => {
+    const results: HandEndResult[] = [];
+    mount(spentStockState(), { redealsAllowed: 0, target: 500, onHandEnd: (r) => results.push(r) });
+
+    click(".pile.stock");
+    click(".pile.stock");
+    click(".pile.stock");
+    click(".pile.stock");
+
+    expect(results).toHaveLength(1);
+  });
+
+  it("leaves freeplay alone — an uncapped stock is never spent", () => {
+    const state = spentStockState();
+    mount(state); // no redeal cap, no onHandEnd
+
+    const stock = root.querySelector(".pile.stock");
+    expect(stock?.classList.contains("spent")).toBe(false);
+    expect(stock?.textContent).toBe("↻");
+  });
+
+  it("still settles as a win if the target was somehow already met", () => {
+    // Reaching the target normally ends the round on the spot, so this only
+    // guards the settle-against-target logic itself.
+    const results: HandEndResult[] = [];
+    mount(spentStockState(), { redealsAllowed: 0, target: 0, onHandEnd: (r) => results.push(r) });
+
+    expect(results).toMatchObject([{ won: true }]);
   });
 });

@@ -297,12 +297,15 @@ body.dragging-card .card.draggable {
 .controls {
   display: flex;
   gap: 12px;
+  /* Pushed to the far end of the HUD row, clear of the score readouts. */
+  margin-left: auto;
+  align-self: center;
 }
 
 .new-game,
 .undo {
-  padding: 8px 16px;
-  font-size: 15px;
+  padding: 6px 14px;
+  font-size: 14px;
   border-radius: 6px;
   border: none;
   cursor: pointer;
@@ -344,6 +347,35 @@ body.dragging-card .card.draggable {
   color: rgba(240, 240, 240, 0.85);
 }
 
+.round-result .second-chance {
+  color: #ffd54a;
+  font-weight: 600;
+}
+
+.round-result .collected {
+  font-size: 14px;
+  color: rgba(240, 240, 240, 0.7);
+}
+
+.hud .peek,
+.hud .power-ups {
+  font-weight: 400;
+  color: rgba(240, 240, 240, 0.75);
+}
+
+.hud .peek-card {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #fdfdf8;
+  color: #111;
+  font-weight: 700;
+}
+
+.hud .peek-card.red {
+  color: #c0272d;
+}
+
 .round-result .continue {
   margin-top: 16px;
   padding: 10px 24px;
@@ -354,4 +386,254 @@ body.dragging-card .card.draggable {
   background: #ffd54a;
   color: #1a1a1a;
   font-weight: 600;
+}
+
+/* ---- Money, jokers and the shop ---- */
+
+.hud .mult {
+  color: #ff7a5c;
+  font-weight: 700;
+}
+
+.hud .money {
+  color: #7ee08a;
+  font-weight: 700;
+}
+
+.hud .jokers {
+  font-weight: 400;
+  color: rgba(240, 240, 240, 0.75);
+}
+
+.payout {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 24px;
+  margin: 12px 0 4px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  font-size: 14px;
+  text-align: left;
+}
+
+.payout dt,
+.payout dd {
+  margin: 0;
+  color: rgba(240, 240, 240, 0.8);
+}
+
+.payout dd {
+  text-align: right;
+  color: #7ee08a;
+  font-weight: 600;
+}
+
+.payout .payout-total {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  font-weight: 700;
+  color: #f0f0f0;
+}
+
+.payout dd.payout-total {
+  color: #7ee08a;
+}
+
+.shop {
+  width: min(100%, 760px);
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+}
+
+.shop-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+
+.shop-title {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffd54a;
+}
+
+.shop-money {
+  font-size: 18px;
+  font-weight: 700;
+  color: #7ee08a;
+}
+
+.shop-items {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.shop-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 8px;
+  width: 176px;
+  padding: 12px;
+  text-align: left;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f0f0f0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.shop-item:hover:not(:disabled),
+.shop-item:focus-visible:not(:disabled) {
+  border-color: #ffd54a;
+  background: rgba(255, 213, 74, 0.14);
+}
+
+.shop-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* One accent per category, so jokers, vouchers and upgrades read apart. */
+.shop-joker .shop-item-name {
+  color: #ff7a5c;
+}
+
+.shop-voucher .shop-item-name {
+  color: #ffd54a;
+}
+
+.shop-upgrade .shop-item-name {
+  color: #6fb7ff;
+}
+
+.shop-item-name {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.shop-item-price {
+  font-weight: 700;
+  color: #7ee08a;
+}
+
+.shop-item-description {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  line-height: 1.35;
+  color: rgba(240, 240, 240, 0.78);
+}
+
+.shop-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.shop-actions .reroll {
+  padding: 10px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.15);
+  color: #f0f0f0;
+}
+
+.shop-actions .reroll:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.shop-actions .continue {
+  margin-top: 0;
+}
+
+.scope-prompt {
+  margin: 0 0 12px;
+  font-weight: 700;
+}
+
+.scope-group {
+  margin-bottom: 12px;
+}
+
+.scope-group-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(240, 240, 240, 0.55);
+}
+
+.scope-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.scope-choice {
+  min-width: 40px;
+  padding: 6px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  background: #fdfdf8;
+  color: #111;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scope-choice.red {
+  color: #c0272d;
+}
+
+.scope-choice:hover,
+.scope-choice:focus-visible {
+  outline: 2px solid #ffd54a;
+  outline-offset: 1px;
+}
+
+.scope-cards .scope-choice {
+  min-width: 34px;
+  padding: 4px 5px;
+  font-size: 12px;
+}
+
+.collected-jokers,
+.collected-upgrades {
+  font-size: 14px;
+  color: rgba(240, 240, 240, 0.7);
+}
+
+/* A spent stock — no cards, no redeals — is how a round is called. */
+.pile.stock.spent {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: center;
+  border-color: rgba(255, 122, 92, 0.5);
+  color: rgba(255, 122, 92, 0.85);
+}
+
+.pile.stock.spent.armed {
+  border-style: solid;
+  border-color: #ff7a5c;
+  color: #ff7a5c;
+  box-shadow: 0 0 14px rgba(255, 122, 92, 0.45);
 }
